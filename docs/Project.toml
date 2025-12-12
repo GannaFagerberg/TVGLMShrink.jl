@@ -1,0 +1,6 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+TVGLMShrink = "f0ebfa52-c0a7-45a5-a670-9dbd11d4b463"
+
+[sources]
+TVGLMShrink = {path = ".."}
