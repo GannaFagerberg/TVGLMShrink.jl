@@ -20,15 +20,19 @@ BetaMean(μ, ψ) = Beta(eps() + μ*ψ, eps() + (1-μ)*ψ)
 
 # ### Simulate data from the Beta regression model with fixed parameter paths
 T = 500;
-p = 3; # Number of parameters, including intercept
-X = [ones(T+1) randn(T+1, p-1)]; # Design matrix
+p = 3; # Number of covariate in μ, including intercept
+q = 1; # Number of covariates in ψ, including intercept
+Xmean = [ones(T+1) randn(T+1, p-1)]; # Design matrix
+Xprec = [ones(T+1) randn(T+1, q-1)];                 # Design matrix for precision
 y = zeros(Float64, T+1)
 β = zeros(T+1,p) # Store the regression parameters
+γ = zeros(T+1,q) # Store the precision parameters
 β[1,:] = [0.0, 0.0, 0.5]
+γ[1,:] = [log(5)] # log precision intercept
 μtime = zeros(T+1)
 ψtime = zeros(T+1)
-ψfunc(t) = t/T < 0.4 ? 5 : 50 - 40*(t/T) # Precision parameter
 invlinkmean_dgp(x) = logistic(x) # Inverse link function for Beta regression
+invlinkprec_dgp(x) = exp(x) # Inverse link function for Beta regression
 for t in 2:(T+1)
     β[t,1] = 1*sin(2π*t/T)
     if t < T/3
@@ -41,12 +45,14 @@ for t in 2:(T+1)
         end
     end
     β[t,3] = 0.5
-    μtime[t] = invlinkmean_dgp(X[t,:]⋅β[t,:])
-    ψtime[t] = ψfunc(t)
+    γ[t,1] = t/T < 0.4 ? log(5) : log(50 - 40*(t/T))
+    μtime[t] = invlinkmean_dgp(Xmean[t,:]⋅β[t,:])
+    ψtime[t] = invlinkprec_dgp(Xprec[t,:]⋅γ[t,:])
     y[t] = rand(BetaMean(μtime[t], ψtime[t]))
 end
 y = y[2:end];
-X = X[2:end,:];
+Xmean = Xmean[2:end,:];
+Xprec = Xprec[2:end,:];
 μtime = μtime[2:end];
 ψtime = ψtime[2:end];
 
@@ -56,8 +62,12 @@ for j = 1:p
     push!(plt, plot(β[:,j], label = "true", xlabel = "time, "*L"t", 
         ylabel = "", title = L"\beta_{%$(j-1)}", color = :black, lw = 2))
 end
-plot(plt..., layout = (p,1), size = (1200, 1000), xguidefontsize = 12, 
-    ylim = [-1.5,1.5], yguidefontsize = 14, titlefontsize=20, 
+for j = 1:q
+    push!(plt, plot(γ[:,j], label = "true", xlabel = "time, "*L"t", 
+        ylabel = "", title = L"\gamma_{%$(j-1)}", color = :black, lw = 2))
+end
+plot(plt..., layout = (2,2), size = (1200, 1000), xguidefontsize = 12, 
+    yguidefontsize = 14, titlefontsize=20, 
     legend = :bottomleft, margin = 5mm) 
 
 # ### Plot the evolution of the mean and precision over time
@@ -84,14 +94,13 @@ heatmap(1:T, xgrid, pdfvals', clims = (0,1), color  = :Blues,
 # Plot the time series
 plot(y, xlabel = "time, "*L"t", ylabel = L"y_t", lw = 1,  
     color = colors[1], legend = nothing)
-savefig(figFolder*"BetaReg_data.pdf")
 
 # ### Set up the prior, model and algorithm settings
 priorSettings = (
     ϕ₀ = 0.5, κ₀ = 0.3,         # Prior for ϕ ~ N(ϕ₀, κ₀²)
     m₀ = -15.0, σ₀ = 3.0,       # Prior for μ ~ N(m₀, σ₀²)
     ν₀ = 3.0, ψ₀ = 1.0,         # Prior for σ²ₙ ~ scaled inverse χ²(ν₀, ψ₀)
-    μ₀ = zeros(p), Σ₀ = 10*I(p),# Prior for βₜ at time t=0
+    μ₀ = zeros(p+q), Σ₀ = 10*I(p+q),# Prior for βₜ at time t=0
 ); 
 
 # ### Set up the Poisson regression model
@@ -103,28 +112,30 @@ end
 
 invlinkmean(x) = logistic(x) # inverse link function for μ in Beta regression
 invlinkprecision(x) = exp(x) # inverse link function for ψ in Beta regression
+const p = size(Xmean,2)
+const q = 1 # Number of precision covariates
 observation(param, state, t) = 
     product_distribution(
         BetaMean.(
             invlinkmean.(param.Zmean[t] * state[1:p]), 
-            invlinkprecision.(param.Zprec[t] * state[(p+1):(2p)])
+            invlinkprecision.(param.Zprec[t] * state[(p+1):(p+q)])
         )
     )
-condMean(param, state, t) = invlinkmean.(param.Z[t] * state)
+condMean(param, state, t) = invlinkmean.(param.Zmean[t] * state[1:p])
 function condCov(param, state, t) 
     μ = invlinkmean.(param.Zmean[t] * state[1:p])
-    ψ = invlinkprecision.(param.Zprec[t] * state[(p+1):(2p)])
-    return diagm(μ .* (1 .- μ) ./ (1 + ψ))
+    ψ = invlinkprecision.(param.Zprec[t] * state[(p+1):(p+q)])
+    return diagm(μ .* (1 .- μ) ./ (1 .+ ψ))
 end
 
 # #### Setting up data as grouped data, here trivial grouping with 1 obs per group
 Zmean = Vector{Matrix{Float64}}(undef, T)
 for i = 1:T
-    Zmean[i] = X[i,:]'
+    Zmean[i] = Xmean[i,:]'
 end
 Zprec = Vector{Matrix{Float64}}(undef, T)
 for i = 1:T
-    Zprec[i] = [1;;]
+    Zprec[i] = Xprec[i,:]'
 end
 Y = Vector{Vector{Float64}}(undef, T) 
 for i = 1:T
@@ -190,7 +201,5 @@ algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_slr)
 IPLF_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
 PlotPostParamEvolution!(plt, IPLF_quantiles, "IPLF($(algoSettings.nMaxIter))"; 
     dateVec = nothing, interval_style = :solid, lw = 2, c = colors[1])
-plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time", 
-    bottommargin = 5mm, ylims = [-1.5,1.5], legend = :bottomleft)
-
-savefig(figFolder*"PoisReg3.pdf")
+plot(plt..., layout = (2,2), size = (1400, 1000), xlabel = "time", 
+    bottommargin = 5mm, legend = :bottomleft)
