@@ -79,7 +79,7 @@ end
 
 invlinkmean(x) = logistic(x) # inverse link function for μ in Beta regression
 observation(param, state, t) = 
-    product_distribution(BetaMean.(invlinkmean.(param.Z[t] ⋅ state), param.ψ))
+    product_distribution(BetaMean.(invlinkmean.(param.Z[t] * state), param.ψ))
 condMean(param, state, t) = invlinkmean.(param.Z[t] * state)
 function condCov(param, state, t) 
     μ = invlinkmean.(param.Z[t] * state)

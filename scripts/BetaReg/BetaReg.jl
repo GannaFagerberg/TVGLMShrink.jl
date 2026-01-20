@@ -27,7 +27,7 @@ y = zeros(Float64, T+1)
 β[1,:] = [0.0, 0.0, 0.5]
 μtime = zeros(T+1)
 ψtime = zeros(T+1)
-ψfunc(t) = t/T < 0.4 ? 1 : 50 - 40*(t/T) # Precision parameter
+ψfunc(t) = t/T < 0.4 ? 5 : 50 - 40*(t/T) # Precision parameter
 invlinkmean_dgp(x) = logistic(x) # Inverse link function for Beta regression
 for t in 2:(T+1)
     β[t,1] = 1*sin(2π*t/T)
@@ -49,25 +49,6 @@ y = y[2:end];
 X = X[2:end,:];
 μtime = μtime[2:end];
 ψtime = ψtime[2:end];
-xgrid = 0.001:0.001:0.999
-pdfvals = zeros(T,length(xgrid))
-for t in 1:T
-    pdfvals[t, :] = pdf.(BetaMean(μtime[t], ψtime[t]), xgrid)
-end
-pdfvals = pdfvals ./ maximum(pdfvals, dims = 2) # Normalize for better color scale
-# plot a heatmap of the pdf evolution with logpdf scale for the colors
-heatmap(xgrid, 1:T, pdfvals, clims = (0,1),
-    xlabel = L"x", ylabel = "time, "*L"t", 
-    title = "Evolution of Beta PDF over time", colorbar_title = "log PDF", 
-    size = (800,600))
-
-
-plot(quants[:,2], fillrange = quants[:,1], alpha = 0.2, color = :gray, lw = 0,
-    label = "", xlabel = "time, "*L"t")
-plot!(quants[:,2], fillrange = quants[:,3], alpha = 0.2, color = :gray, lw = 0,
-    label = "")
-#plot!(quants[:,2], color = :gray, lw = 1, label = "")
-scatter!(y, markersize = 2, color = colors[3], label = "observations")
 
 # ### Plot the parameter evolution path of βₜ
 plt = []
@@ -78,6 +59,27 @@ end
 plot(plt..., layout = (p,1), size = (1200, 1000), xguidefontsize = 12, 
     ylim = [-1.5,1.5], yguidefontsize = 14, titlefontsize=20, 
     legend = :bottomleft, margin = 5mm) 
+
+# ### Plot the evolution of the mean and precision over time
+p1 = plot(1:T, μtime, title = L"\mu_t", xlabel = "time, "*L"t", ylim = [0,1],
+    ylabel = "", lw = 2, color = colors[1], label = nothing);
+p2 = plot(1:T, ψtime, title = L"\psi_t", lw = 2, color = colors[3], ylim = [0,40],
+    xlabel = "time, "*L"t", ylabel = "", legend = nothing);
+plot(p1, p2, layout = (2,1), size = (800,600), 
+    xguidefontsize = 12, yguidefontsize = 14, titlefontsize=18, margin = 5mm)
+
+# ### Plot the evolution of the Beta density over time
+xgrid = 0.001:0.001:0.999
+pdfvals = zeros(T, length(xgrid))
+for t in 1:T
+    pdfvals[t, :] = pdf.(BetaMean(μtime[t], ψtime[t]), xgrid)
+end
+pdfvals = pdfvals ./ maximum(pdfvals, dims = 2) # Normalize for better color scale
+# plot a heatmap of the pdf evolution with logpdf scale for the colors
+heatmap(1:T, xgrid, pdfvals', clims = (0,1), color  = :Blues,
+    ylabel = "density", xlabel = "time, "*L"t", 
+    title = "Evolution of Beta PDF over time", colorbar_title = "log PDF", 
+    size = (800,600))
 
 # Plot the time series
 plot(y, xlabel = "time, "*L"t", ylabel = L"y_t", lw = 1,  
@@ -94,24 +96,35 @@ priorSettings = (
 
 # ### Set up the Poisson regression model
 mutable struct ParamTvReg
-    ψ::Float64
     Σᵥ::Vector{PDMat{Float64}}
-    Z::Vector{Matrix{Float64}} # Covariates for each group
+    Zmean::Vector{Matrix{Float64}} # Covariates in the mean for each group
+    Zprec::Vector{Matrix{Float64}} # Covariates in the precision for each group
 end
 
 invlinkmean(x) = logistic(x) # inverse link function for μ in Beta regression
+invlinkprecision(x) = exp(x) # inverse link function for ψ in Beta regression
 observation(param, state, t) = 
-    product_distribution(BetaMean.(invlinkmean.(param.Z[t] ⋅ state), param.ψ))
+    product_distribution(
+        BetaMean.(
+            invlinkmean.(param.Zmean[t] * state[1:p]), 
+            invlinkprecision.(param.Zprec[t] * state[(p+1):(2p)])
+        )
+    )
 condMean(param, state, t) = invlinkmean.(param.Z[t] * state)
 function condCov(param, state, t) 
-    μ = invlinkmean.(param.Z[t] * state)
-    return diagm(μ .* (1 .- μ) ./ (1 + param.ψ))
+    μ = invlinkmean.(param.Zmean[t] * state[1:p])
+    ψ = invlinkprecision.(param.Zprec[t] * state[(p+1):(2p)])
+    return diagm(μ .* (1 .- μ) ./ (1 + ψ))
 end
 
 # #### Setting up data as grouped data, here trivial grouping with 1 obs per group
-Z = Vector{Matrix{Float64}}(undef, T)
+Zmean = Vector{Matrix{Float64}}(undef, T)
 for i = 1:T
-    Z[i] = X[i,:]'
+    Zmean[i] = X[i,:]'
+end
+Zprec = Vector{Matrix{Float64}}(undef, T)
+for i = 1:T
+    Zprec[i] = [1;;]
 end
 Y = Vector{Vector{Float64}}(undef, T) 
 for i = 1:T
@@ -119,7 +132,7 @@ for i = 1:T
 end
 
 # Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
-param = ParamTvReg(ψ, LogVol2Covs(zeros(T,p)), Z) 
+param = ParamTvReg(LogVol2Covs(zeros(T,p)), Zmean, Zprec) 
 
 modelSettings = (
     observation = observation,
