@@ -6,7 +6,8 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
 
     T = length(Y)
     ϕ₀, κ₀, m₀, σ₀, ν₀, ψ₀, μ₀, Σ₀ = priorSettings
-    stateSamplingMethod, nParticles, nIter, nBurn, offsetMethod = algoSettings 
+    stateSamplingMethod, nParticles, nIter, nBurn, nMaxIter, nPrePGAS, offsetMethod = 
+        algoSettings 
     observation, param, condMean, condCov, α, β, updateσₙ, nMixComp = modelSettings
     p = length(μ₀) # number of states
 
@@ -28,7 +29,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
     θpost = zeros(T+1, p, nIter) # Store regression coefficients
     Hpost = zeros(T, p, nIter) # Store log-volatility evolution
     ϕpost = zeros(p, nIter) # Store AR coefficients
-    σₙpost = zeros(p, nIter) # Store variance in log-volatility evolution
+    σ²ₙpost = zeros(p, nIter) # Store variance in log-volatility evolution
     μpost = zeros(p, nIter) # Store mean in log-volatility evolution
     
     offset = (offsetMethod == "kowal") ? eps()*ones(T,p) : offsetMethod 
@@ -45,13 +46,32 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
     U = zeros(T,1)
 
     if stateSamplingMethod == :pgas
-        initialization = prior
         θparticles = zeros(nParticles, p, T+1) # Initialize PGAS particle container.
-        θ = PGASsimulate!(θparticles, Y, p, nParticles, param, 
+        if nPrePGAS > 0
+            println("Getting initial values from Laplace")
+            algoSettingsInit = (stateSamplingMethod = :ffbs_laplace, 
+                nParticles = nParticles, nIter = nPrePGAS, 
+                nBurn = round(Int, 0.1*nPrePGAS), nMaxIter = nMaxIter, 
+                nPrePGAS = 0, offsetMethod = offsetMethod)
+            θpost0, Hpost0, ϕpost0, σ²ₙpost0, μpost0 = GibbsTVGLM(Y, priorSettings, 
+                modelSettings, algoSettingsInit);
+            μ_prop = median(θpost0[1,:,:], dims = 2)[:]
+            Σ_prop = PDMat(cov(θpost0[1,:,:], dims = 2))
+            initialization = MvNormal(μ_prop, Σ_prop)
+            θ = median(θpost0, dims = 3) # Initial reference particle for pgas
+            H = median(Hpost0, dims = 3)
+            ϕ = median(ϕpost0, dims = 2)
+            μ = median(μpost0, dims = 2)
+            updateσₙ ? σ²ₙ = median(σ²ₙpost0, dims = 2) : σ²ₙ = fill(1, p)
+        else
+            initialization = prior
+            θ = PGASsimulate!(θparticles, Y, p, nParticles, param, 
                 prior, transition, observation, initialization, systematic)
+        end
     end
 
-    @showprogress for i in 1:(nBurn + nIter)
+    progressMessage = "Sampling progress: "
+    @showprogress desc=progressMessage for i in 1:(nBurn + nIter)
         
         ## Draw state 
         LogVol2Covs!(param.Σᵥ, H) 
@@ -59,8 +79,8 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
         if stateSamplingMethod == :ffbs_laplace
             θ = FFBS_laplace(U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param)
         elseif stateSamplingMethod == :ffbs_slr
-            θ = FFBS_SLR(U, Y, A, B, μₖ_x, Pₖʸ_x, Cargs, param.Σᵥ, μ₀, Σ₀,
-                    maxIter, 1; α = 1, β = 0, κ = 0, sample_t0 = true)
+            θ = FFBS_SLR(U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,
+                    nMaxIter, 1; α = 1, β = 0, κ = 0, sample_t0 = true)
         elseif stateSamplingMethod == :pgas
             θ = PGASsimulate!(θparticles, Y, p, nParticles, param, 
                 prior, transition, observation, initialization, systematic, θ) 
@@ -77,11 +97,11 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
             θpost[:, :, i - nBurn] = θ
             Hpost[:, :, i - nBurn] = H 
             ϕpost[:, i - nBurn] = ϕ
-            σₙpost[:, i - nBurn] = σ²ₙ
+            σ²ₙpost[:, i - nBurn] = σ²ₙ
             μpost[:, i - nBurn] = μ
         end
     end
     
-    return θpost, Hpost, ϕpost, σₙpost, μpost
+    return θpost, Hpost, ϕpost, σ²ₙpost, μpost
 
 end
