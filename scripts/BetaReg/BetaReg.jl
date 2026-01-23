@@ -16,10 +16,10 @@ Random.seed!(12345);
 
 figFolder = joinpath(@__DIR__,"figs/")
 
-BetaMean(μ, ψ) = Beta(eps() + μ*ψ, eps() + (1-μ)*ψ)
+BetaMean(μ, ψ) = Beta(5.0e-5 + μ*ψ, 5.0e-5 + (1-μ)*ψ)
 
 # ### Simulate data from the Beta regression model with fixed parameter paths
-T = 500;
+T = 500;laplace
 p = 1; # Number of covariate in μ, including intercept
 q = 1; # Number of covariates in ψ, including intercept
 Xmean = [ones(T+1) randn(T+1, p-1)]; # Design matrix
@@ -27,26 +27,15 @@ Xprec = [ones(T+1) randn(T+1, q-1)];                 # Design matrix for precisi
 y = zeros(Float64, T+1)
 β = zeros(T+1,p) # Store the regression parameters
 γ = zeros(T+1,q) # Store the precision parameters
-β[1,:] = [0.0, 0.0, 0.5]
+β[1,:] = [1]
 γ[1,:] = [1] # log precision intercept
 μtime = zeros(T+1)
 ψtime = zeros(T+1)
 invlinkmean_dgp(x) = logistic(x) # Inverse link function for Beta regression
 invlinkprec_dgp(x) = exp(x) # Inverse link function for Beta regression
 for t in 2:(T+1)
-    β[t,1] = 1*sin(2π*t/T)
-    if t < T/3
-        β[t,2] = 0
-    else 
-        if t < ((2/3)*T)
-            β[t,2] = -1
-        else
-            β[t,2] = 1
-        end
-    end
-    β[t,3] = 0.5
-    γ[t,1] = 1
-    #γ[t,1] = t/T < 0.4 ? log(5) : log(50 - 40*(t/T))
+    β[t,:] .= 1.0
+    γ[t,:] .= 1.0
     μtime[t] = invlinkmean_dgp(Xmean[t,:]⋅β[t,:])
     ψtime[t] = invlinkprec_dgp(Xprec[t,:]⋅γ[t,:])
     y[t] = rand(BetaMean(μtime[t], ψtime[t]))
@@ -114,7 +103,7 @@ plot(y, xlabel = "time, "*L"t", ylabel = L"y_t", lw = 1,
 # ### Set up the prior, model and algorithm settings
 priorSettings = (
     ϕ₀ = 0.5, κ₀ = 0.3,         # Prior for ϕ ~ N(ϕ₀, κ₀²)
-    m₀ = -8.0, σ₀ = 3.0,       # Prior for μ ~ N(m₀, σ₀²)
+    m₀ = -15.0, σ₀ = 3.0,       # Prior for μ ~ N(m₀, σ₀²)
     ν₀ = 3.0, ψ₀ = 1.0,         # Prior for σ²ₙ ~ scaled inverse χ²(ν₀, ψ₀)
     μ₀ = zeros(p+q), Σ₀ = 1*I(p+q),# Prior for βₜ at time t=0
 ); 
