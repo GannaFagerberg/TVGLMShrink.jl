@@ -12,7 +12,7 @@ gr(legend = :topleft, grid = false, color = colors[2], lw = 2, legendfontsize=12
     xtickfontsize=12, ytickfontsize=12, xguidefontsize=12, yguidefontsize=12,
     titlefontsize = 18, markerstrokecolor = :auto)
 
-Random.seed!(12345);
+Random.seed!(1);
 
 figFolder = joinpath(@__DIR__,"figs/")
 
