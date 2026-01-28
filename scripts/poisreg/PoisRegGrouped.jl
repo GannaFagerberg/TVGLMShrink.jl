@@ -1,6 +1,17 @@
-using Pkg
-Pkg.activate(joinpath(@__DIR__, "../.."))
-cd(joinpath(@__DIR__, "../.."))
+# # Poisson regression with Dynamic Shrinkage Process parameter evolution
+
+# In this example we explore the joint posterior in the Poisson regression model with parameters following independent dynamic shrinkage process priors.
+#
+# ```math
+# \begin{align*}
+#   y_t \vert \boldsymbol{x}_t &\sim \mathrm{Poisson}\big( \exp(\boldsymbol{x}_t^\top \boldsymbol{\beta}_t) \big) \\
+# \boldsymbol{\beta}_t &= \boldsymbol{\beta}_{t-1} + \boldsymbol{\nu}_t, \quad \boldsymbol{\nu}_t \sim N\Big(\boldsymbol{0},\mathrm{Diag}(\exp(\boldsymbol{h}_t/2))\Big) \\
+#   \boldsymbol{h}_t &= \boldsymbol{\mu} + \phi(\boldsymbol{h}_{t-1} -\boldsymbol{\mu}) + \boldsymbol{\eta}_t, \quad \boldsymbol{\eta}_t \sim Z(\alpha,\alpha, 0, \sigma_\eta) \\
+# \end{align*}
+# ```
+#
+
+# First we load the required packages and set some plotting parameters:
 using TVGLMShrink
 using Distributions, LaTeXStrings, Plots, LinearAlgebra, Measures, Random
 using PDMats
@@ -14,7 +25,6 @@ gr(legend = :topleft, grid = false, color = colors[2], lw = 2, legendfontsize=12
 
 Random.seed!(12345);
 
-figFolder = joinpath(@__DIR__,"figs/")
 
 # ### Simulate data from the Poisson regression model with fixed parameter paths
 T = 500;
@@ -41,7 +51,7 @@ end
 y = y[2:end];
 X = X[2:end,:];
 
-# ### Plot the parameter evolution path of βₜ
+# ### Plot the parameter evolution path of βₜ and the time series
 plt = []
 for j = 1:p
     push!(plt, plot(β[:,j], label = "true", xlabel = "time, "*L"t", 
@@ -55,7 +65,6 @@ plot(plt..., layout = (p,1), size = (1200, 1000), xguidefontsize = 12,
 plot(y, xlabel = "time, "*L"t", ylabel = L"y_t", lw = 1,  
     color = colors[1], legend = nothing)
 scatter!(y, markersize = 2, color = colors[1])
-savefig(figFolder*"PoisReg_dataNew.pdf")
 
 # ### Set up the prior, model and algorithm settings
 priorSettings = (
@@ -72,22 +81,16 @@ mutable struct ParamTvReg
 end
 
 invlink(x) = exp_lin(x) # inverse link function for Poisson regression
-observation(param, state, t) = product_distribution(Poisson.(invlink.(param.Z[t] ⋅ state)))
+observation(param, state, t) = product_distribution(Poisson.(invlink.(param.Z[t] * state)))
 condMean(param, state, t) = invlink.(param.Z[t] * state)
 condCov(param, state, t) = diagm(invlink.(param.Z[t] * state))
 
-# #### Setting up data as grouped data, here trivial grouping with 1 obs per group
-Z = Vector{Matrix{Float64}}(undef, T)
-for i = 1:T
-    Z[i] = X[i,:]'
-end
-Y = Vector{Vector{Float64}}(undef, T) 
-for i = 1:T
-    Y[i] = [y[i]]
-end
+# #### Setting up data as grouped data
+nPerGroup = 1
+Y, Z, groupSizes = splitEqualGroups(y, X, nPerGroup)
 
 # Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
-param = ParamTvReg(LogVol2Covs(zeros(T,p)), Z) 
+param = ParamTvReg(LogVol2Covs(zeros(length(groupSizes), p)), Z) 
 
 modelSettings = (
     observation = observation,
@@ -103,8 +106,8 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod = :pgas, #:ffbs_laplace, # Algorithm to sample the state
     nParticles = 200,           # Number of particles if using PGAS
-    nIter = 10000,               # Number of iterations in the Gibbs sampler
-    nBurn = 3000,               # Number of burn-in iterations
+    nIter = 1000,               # Number of iterations in the Gibbs sampler
+    nBurn = 1000,               # Number of burn-in iterations
     nMaxIter = 10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS = 500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod = eps()        # Offset for log-volatility
@@ -115,12 +118,10 @@ algoSettings = (
     algoSettings);
 
 PGAS_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
-PlotPostParamEvolution!(plt, PGAS_quantiles, "PGAS($(algoSettings.nParticles))"; 
-    dateVec = nothing, interval_style = :shaded, lw = 2, c = :gray)
+PlotPostParamEvolution!(plt, PGAS_quantiles, "PGAS($(algoSettings.nParticles))",
+    groupSizes; dateVec = nothing, interval_style = :shaded, lw = 2, c = :gray);
 plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time", 
     bottommargin = 5mm, ylims = [-1.5,1.5], legend = :bottomleft)
-
-
 
 # ### Laplace approximation
 algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_laplace)
@@ -147,5 +148,3 @@ PlotPostParamEvolution!(plt, IPLF_quantiles, "IPLF($(algoSettings.nMaxIter))";
     dateVec = nothing, interval_style = :solid, lw = 2, c = colors[1])
 plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time", 
     bottommargin = 5mm, ylims = [-1.5,1.5], legend = :bottomleft)
-
-savefig(figFolder*"PoisReg3.pdf")

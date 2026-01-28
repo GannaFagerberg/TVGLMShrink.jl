@@ -1489,7 +1489,7 @@ version = "0.7.0"
 
 [[deps.SMCsamplers]]
 deps = ["BenchmarkTools", "CSV", "Distributions", "ForwardDiff", "LaTeXStrings", "LineSearches", "LinearAlgebra", "Literate", "Measures", "Optim", "PDMats", "PProf", "Plots", "Profile", "Random", "Revise", "Statistics", "Utils"]
-git-tree-sha1 = "ac188f7fc30d91b971c0aacd061b10a4c42f2330"
+git-tree-sha1 = "494730fdc589e09959420c07163ae807ad78f0d1"
 repo-rev = "main"
 repo-url = "https://github.com/compbayes/SMCsamplers.jl.git"
 uuid = "2328efba-24c2-4a10-a32f-a74f69d05fca"
@@ -1659,7 +1659,7 @@ uuid = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 version = "1.0.3"
 
 [[deps.TVGLMShrink]]
-deps = ["BandedMatrices", "BenchmarkTools", "CSV", "DataFrames", "Distributions", "DynamicGlobalLocalShrinkage", "ForwardDiff", "LaTeXStrings", "LinearAlgebra", "LogExpFunctions", "Measures", "Optim", "PDMats", "Plots", "ProgressMeter", "Revise", "SMCsamplers", "Utils"]
+deps = ["BandedMatrices", "BenchmarkTools", "CSV", "DataFrames", "Distributions", "DynamicGlobalLocalShrinkage", "ForwardDiff", "LaTeXStrings", "LinearAlgebra", "LogExpFunctions", "Measures", "Optim", "PDMats", "Plots", "ProgressMeter", "Revise", "Utils"]
 path = "."
 uuid = "f0ebfa52-c0a7-45a5-a670-9dbd11d4b463"
 version = "1.0.0-DEV"
