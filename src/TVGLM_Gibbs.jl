@@ -6,8 +6,8 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
 
     T = length(Y)
     ϕ₀, κ₀, m₀, σ₀, ν₀, ψ₀, μ₀, Σ₀ = priorSettings
-    stateSamplingMethod, nParticles, nIter, nBurn, nMaxIter, nPrePGAS, offsetMethod = 
-        algoSettings 
+    stateSamplingMethod, nParticles, nIter, nBurn, nMaxIter, nPrePGAS, 
+        offsetMethod, h_upper = algoSettings 
     observation, param, condMean, condCov, α, β, updateσₙ, nMixComp = modelSettings
     p = length(μ₀) # number of states
 
@@ -17,7 +17,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
     ## Initial values          
     S = zeros(Int8, T, p)    # Mixture allocation for logχ²₁ - this is updated first
     μ = fill(m₀, p)
-    updateσₙ ? σ²ₙ = fill(ψ₀, p) : σ²ₙ = fill(1, p)
+    updateσₙ ? σ²ₙ = fill(ψ₀, p) : σ²ₙ = fill(ψ₀, p)
     ϕ = fill(ϕ₀, p)
     H = fill(m₀, T, p)
     H̃ = H .- μ'
@@ -52,7 +52,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
             algoSettingsInit = (stateSamplingMethod = :ffbs_laplace, 
                 nParticles = nParticles, nIter = nPrePGAS, 
                 nBurn = round(Int, 0.1*nPrePGAS), nMaxIter = nMaxIter, 
-                nPrePGAS = 0, offsetMethod = offsetMethod)
+                nPrePGAS = 0, offsetMethod = offsetMethod, h_upper = h_upper)
             θpost0, Hpost0, ϕpost0, σ²ₙpost0, μpost0 = GibbsTVGLM(Y, priorSettings, 
                 modelSettings, algoSettingsInit);
             μ_prop = median(θpost0[1,:,:], dims = 2)[:]
@@ -62,7 +62,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
             H = median(Hpost0, dims = 3)
             ϕ = median(ϕpost0, dims = 2)
             μ = median(μpost0, dims = 2)
-            updateσₙ ? σ²ₙ = median(σ²ₙpost0, dims = 2) : σ²ₙ = fill(1, p)
+            updateσₙ ? σ²ₙ = median(σ²ₙpost0, dims = 2) : σ²ₙ = fill(ψ₀, p)
         else
             initialization = prior
             θ = PGASsimulate!(θparticles, Y, p, nParticles, param, 
@@ -76,8 +76,17 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
         ## Draw state 
         LogVol2Covs!(param.Σᵥ, H) 
 
+        # Find maximum of H and its row and column indices
+        printH = false # FIXME: remove after debugging
+        if printH
+            maxH, CartIdx = findmax(H)
+            println("max H: ");display(maximum(H)) # Display current volatilities
+            println("at time t = ", CartIdx[1], ", state index = ", CartIdx[2])
+        end
+
         if stateSamplingMethod == :ffbs_laplace
-            θ = FFBS_laplace(U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param)
+            θ = FFBS_laplace(U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param; 
+                max_iter = nMaxIter)
         elseif stateSamplingMethod == :ffbs_slr
             θ = FFBS_SLR(U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,
                     nMaxIter, 1; α = 1, β = 0, κ = 0, sample_t0 = true)
@@ -91,8 +100,9 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
         ## Update the log-volatility evolution
         ν = diff(θ, dims = 1)
         setOffset!(offset, ν, offsetMethod)
-        update_dsp!(ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings, mixture, Dᵩ)
-        
+        update_dsp!(ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings, mixture, Dᵩ,
+            offset, α, β, updateσₙ, h_upper)
+
         if i > nBurn
             θpost[:, :, i - nBurn] = θ
             Hpost[:, :, i - nBurn] = H 

@@ -28,7 +28,7 @@ Random.seed!(12345);
 
 # ### Simulate data from the Poisson regression model with fixed parameter paths
 T = 500;
-p = 3; # Number of parameters, including intercept
+p = 3;      # Number of parameters, including intercept
 X = [ones(T+1) randn(T+1, p-1)]; # Design matrix
 y = zeros(Int, T+1)
 β = zeros(T+1,p) # Store the regression parameters
@@ -75,9 +75,9 @@ priorSettings = (
 ); 
 
 # ### Set up the Poisson regression model
-mutable struct ParamTvReg
-    Σᵥ::Vector{PDMat{Float64}}
-    Z::Vector{Matrix{Float64}} # Covariates for each group
+mutable struct ParamTvReg{T, S<:AbstractMatrix{T}}
+    Σᵥ::Vector{PDMat{T,S}}
+    Z::Vector{Matrix{T}}
 end
 
 invlink(x) = exp_lin(x) # inverse link function for Poisson regression
@@ -110,11 +110,12 @@ algoSettings = (
     nBurn = 1000,               # Number of burn-in iterations
     nMaxIter = 10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS = 500,             # Number of pre-PGAS iterations to initialize the particles
-    offsetMethod = eps()        # Offset for log-volatility
+    offsetMethod = eps(),       # Offset for log-volatility
+    h_upper = Inf               # Upper bound for log-volatility
 );
 
 # ### PGAS 
-θpost, Hpost, ϕpost, σₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
+θpost, Hpost, ϕpost, σ²ₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
     algoSettings);
 
 PGAS_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
@@ -126,11 +127,11 @@ plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time",
 # ### Laplace approximation
 algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_laplace)
 
-θpost, Hpost, ϕpost, σₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
+θpost, Hpost, ϕpost, σ²ₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
     algoSettings);
 
 Laplace_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
-PlotPostParamEvolution!(plt, Laplace_quantiles, "Laplace"; 
+PlotPostParamEvolution!(plt, Laplace_quantiles, "Laplace", groupSizes; 
     dateVec = nothing, interval_style = :dash, lw = 2, c = colors[3])
 plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time", 
     bottommargin = 5mm, ylims = [-1.5,1.5], legend = :bottomleft)
@@ -140,11 +141,12 @@ plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time",
 # ### Iterated Posterior linearization filter
 algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_slr)
 
-θpost, Hpost, ϕpost, σₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
+θpost, Hpost, ϕpost, σ²ₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
     algoSettings);
 
 IPLF_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
-PlotPostParamEvolution!(plt, IPLF_quantiles, "IPLF($(algoSettings.nMaxIter))"; 
+PlotPostParamEvolution!(plt, IPLF_quantiles, "IPLF($(algoSettings.nMaxIter))",
+    groupSizes; 
     dateVec = nothing, interval_style = :solid, lw = 2, c = colors[1])
 plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time", 
     bottommargin = 5mm, ylims = [-1.5,1.5], legend = :bottomleft)
