@@ -17,7 +17,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
     ## Initial values          
     S = zeros(Int8, T, p)    # Mixture allocation for logχ²₁ - this is updated first
     μ = fill(m₀, p)
-    updateσₙ ? σ²ₙ = fill(ψ₀, p) : σ²ₙ = fill(ψ₀, p)
+    σ²ₙ = fill(ψ₀, p)
     ϕ = fill(ϕ₀, p)
     H = fill(m₀, T, p)
     H̃ = H .- μ'
