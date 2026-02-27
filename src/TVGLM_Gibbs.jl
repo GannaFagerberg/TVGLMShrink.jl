@@ -76,14 +76,6 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
         ## Draw state 
         LogVol2Covs!(param.Σᵥ, H) 
 
-        # Find maximum of H and its row and column indices
-        printH = false # FIXME: remove after debugging
-        if printH
-            maxH, CartIdx = findmax(H)
-            println("max H: ");display(maximum(H)) # Display current volatilities
-            println("at time t = ", CartIdx[1], ", state index = ", CartIdx[2])
-        end
-
         if stateSamplingMethod == :ffbs_laplace
             θ = FFBS_laplace(U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param; 
                 max_iter = nMaxIter)
