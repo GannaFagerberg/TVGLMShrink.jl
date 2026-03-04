@@ -70,34 +70,29 @@ priorSettings = (
     μ₀ = zeros(p), Σ₀ = 10*I(p),# Prior for βₜ at time t=0
 ); 
 
-# ### Set up the Poisson regression model
-mutable struct ParamTvReg
-    ψ::Float64
-    Σᵥ::Vector{PDMat{Float64}}
-    Z::Vector{Matrix{Float64}} # Covariates for each group
+# ### Set up the Beta regression model
+mutable struct ParamTvReg{T, S<:AbstractMatrix{T}}
+    ψ::T
+    Σᵥ::Vector{PDMat{T,S}}
+    Zmean::Vector{Matrix{T}}
 end
 
 invlinkmean(x) = logistic(x) # inverse link function for μ in Beta regression
 observation(param, state, t) = 
-    product_distribution(BetaMean.(invlinkmean.(param.Z[t] * state), param.ψ))
-condMean(param, state, t) = invlinkmean.(param.Z[t] * state)
+    product_distribution(BetaMean.(invlinkmean.(param.Zmean[t] * state), param.ψ))
+condMean(param, state, t) = invlinkmean.(param.Zmean[t] * state)
 function condCov(param, state, t) 
-    μ = invlinkmean.(param.Z[t] * state)
+    μ = invlinkmean.(param.Zmean[t] * state)
     return diagm(μ .* (1 .- μ) ./ (1 + param.ψ))
 end
 
-# #### Setting up data as grouped data, here trivial grouping with 1 obs per group
-Z = Vector{Matrix{Float64}}(undef, T)
-for i = 1:T
-    Z[i] = X[i,:]'
-end
-Y = Vector{Vector{Float64}}(undef, T) 
-for i = 1:T
-    Y[i] = [y[i]]
-end
+# #### Setting up data as grouped data
+# #### Setting up data as grouped data
+nPerGroup = 3
+Y, Zmean, groupSizes = splitEqualGroups(y, X, nPerGroup)
 
 # Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
-param = ParamTvReg(ψ, LogVol2Covs(zeros(T,p)), Z) 
+param = ParamTvReg(ψ, LogVol2Covs(zeros(T,p)), Zmean) 
 
 modelSettings = (
     observation = observation,
@@ -117,11 +112,12 @@ algoSettings = (
     nBurn = 1000,               # Number of burn-in iterations
     nMaxIter = 10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS = 500,             # Number of pre-PGAS iterations to initialize the particles
-    offsetMethod = eps()        # Offset for log-volatility
+    offsetMethod = eps(),       # Offset for log-volatility
+    h_upper = Inf               # Upper bound for log-volatility
 );
 
 # ### PGAS 
-θpost, Hpost, ϕpost, σₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
+θpost, Hpost, ϕpost, σ²ₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
     algoSettings);
 
 PGAS_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
@@ -135,7 +131,7 @@ plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time",
 # ### Laplace approximation
 algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_laplace)
 
-θpost, Hpost, ϕpost, σₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
+θpost, Hpost, ϕpost, σ²ₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
     algoSettings);
 
 Laplace_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
@@ -149,7 +145,7 @@ plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time",
 # ### Iterated Posterior linearization filter
 algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_slr)
 
-θpost, Hpost, ϕpost, σₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
+θpost, Hpost, ϕpost, σ²ₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
     algoSettings);
 
 IPLF_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
