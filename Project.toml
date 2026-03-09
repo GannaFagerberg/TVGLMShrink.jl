@@ -23,11 +23,6 @@ Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
 SMCsamplers = "2328efba-24c2-4a10-a32f-a74f69d05fca"
 Utils = "a6a4a4df-ba9f-45e9-bafc-bec3296762b9"
 
-[sources]
-Utils = {rev = "main", url = "https://github.com/compbayes/Utils.jl.git"}
-DynamicGlobalLocalShrinkage = {rev = "main", url = "https://github.com/compbayes/DynamicGlobalLocalShrinkage.jl.git"}
-SMCsamplers = {rev = "main", url = "https://github.com/compbayes/SMCsamplers.jl.git"}
-
 [compat]
 BandedMatrices = "1.10.2"
 BenchmarkTools = "1.6.3"
@@ -46,7 +41,7 @@ Plots = "1.41.2"
 ProgressMeter = "1.11.0"
 Revise = "3.12.3"
 SMCsamplers = "1.0.0"
-Utils = "0.1.0"
+Utils = "0.1.1"
 julia = "1.12"
 
 [extras]
