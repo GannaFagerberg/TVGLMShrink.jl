@@ -2,7 +2,7 @@
 
 julia_version = "1.12.4"
 manifest_format = "2.0"
-project_hash = "c08bd520357d435a99f4153e0fee45cb7be3fabe"
+project_hash = "d04fa3ae0a751c733720a07e2e0c7a55b7f347fa"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "f7304359109c768cf32dc5fa2d371565bb63b68a"
@@ -545,9 +545,9 @@ version = "1.7.0"
 
 [[deps.DynamicGlobalLocalShrinkage]]
 deps = ["BandedMatrices", "Colors", "Distributions", "LinearAlgebra", "PDMats", "PolyaGammaSamplers", "SparseArrays", "Statistics", "StatsBase", "Utils"]
-git-tree-sha1 = "5f2d2bdb045b64fdb1a1e21d196da803c6b35625"
+git-tree-sha1 = "2fe2860bdda461e147b21cf5845f8c4616c443b7"
 uuid = "95f0ba86-bb51-4e4e-bc21-89dc4565d801"
-version = "1.0.0"
+version = "1.0.1"
 
 [[deps.EnumX]]
 git-tree-sha1 = "c49898e8438c828577f04b92fc9368c388ac783c"
@@ -757,9 +757,9 @@ version = "1.0.2"
 
 [[deps.HTTP]]
 deps = ["Base64", "CodecZlib", "ConcurrentUtilities", "Dates", "ExceptionUnwrapping", "Logging", "LoggingExtras", "MbedTLS", "NetworkOptions", "OpenSSL", "PrecompileTools", "Random", "SimpleBufferStream", "Sockets", "URIs", "UUIDs"]
-git-tree-sha1 = "5e6fe50ae7f23d171f44e311c2960294aaa0beb5"
+git-tree-sha1 = "51059d23c8bb67911a2e6fd5130229113735fc7e"
 uuid = "cd3eb016-35fb-5094-929b-558a96fad6f3"
-version = "1.10.19"
+version = "1.11.0"
 
 [[deps.HarfBuzz_jll]]
 deps = ["Artifacts", "Cairo_jll", "Fontconfig_jll", "FreeType2_jll", "Glib_jll", "Graphite2_jll", "JLLWrappers", "Libdl", "Libffi_jll"]
@@ -1501,9 +1501,9 @@ version = "0.7.0"
 
 [[deps.SMCsamplers]]
 deps = ["BenchmarkTools", "CSV", "Distributions", "ForwardDiff", "LaTeXStrings", "LineSearches", "LinearAlgebra", "Literate", "Measures", "Optim", "PDMats", "PProf", "Plots", "Profile", "Random", "Revise", "Statistics", "Utils"]
-git-tree-sha1 = "2943d52ffea2892f255840560b3092dece0d964c"
+git-tree-sha1 = "ea1f24b5aa474c9122045593c624a705a0945856"
 uuid = "2328efba-24c2-4a10-a32f-a74f69d05fca"
-version = "1.0.0"
+version = "1.0.2"
 
 [[deps.Scratch]]
 deps = ["Dates"]
@@ -1582,9 +1582,9 @@ version = "1.0.4"
 
 [[deps.StaticArrays]]
 deps = ["LinearAlgebra", "PrecompileTools", "Random", "StaticArraysCore"]
-git-tree-sha1 = "0f529006004a8be48f1be25f3451186579392d47"
+git-tree-sha1 = "246a8bb2e6667f832eea063c3a56aef96429a3db"
 uuid = "90137ffa-7385-5640-81b9-e52037218182"
-version = "1.9.17"
+version = "1.9.18"
 weakdeps = ["ChainRulesCore", "Statistics"]
 
     [deps.StaticArrays.extensions]
@@ -1768,9 +1768,9 @@ version = "0.2.0"
 
 [[deps.Utils]]
 deps = ["AdvancedMH", "ColorSchemes", "DataFrames", "Distances", "Distributions", "ForwardDiff", "KernelDensity", "LaTeXStrings", "LinearAlgebra", "Loess", "LogExpFunctions", "Optim", "PDMats", "Plots", "ProgressMeter", "Random", "SpecialFunctions", "Statistics", "StatsPlots"]
-git-tree-sha1 = "5e80f00b61919281f2e0cc8b6193f6952856c6fb"
+git-tree-sha1 = "db691c7685339e2d3bebe4d22b800c8c10a5d930"
 uuid = "a6a4a4df-ba9f-45e9-bafc-bec3296762b9"
-version = "0.1.1"
+version = "1.0.1"
 
 [[deps.Vulkan_Loader_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Wayland_jll", "Xorg_libX11_jll", "Xorg_libXrandr_jll", "xkbcommon_jll"]
