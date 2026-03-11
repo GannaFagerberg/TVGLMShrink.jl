@@ -1672,7 +1672,7 @@ version = "1.0.3"
 deps = ["BandedMatrices", "BenchmarkTools", "CSV", "DataFrames", "Distributions", "DynamicGlobalLocalShrinkage", "ForwardDiff", "LaTeXStrings", "LinearAlgebra", "LogExpFunctions", "Measures", "Optim", "PDMats", "Plots", "ProgressMeter", "Revise", "SMCsamplers", "Utils"]
 path = "."
 uuid = "f0ebfa52-c0a7-45a5-a670-9dbd11d4b463"
-version = "1.0.0-DEV"
+version = "0.1.0"
 
 [[deps.TableOperations]]
 deps = ["SentinelArrays", "Tables", "Test"]
