@@ -53,6 +53,8 @@ X = [Xmean, Xprec]
 p = size(X[1], 2)
 q = size(X[2], 2)
 
+
+
 # plot \mu and \psi time series
 p1 = plot(μtime, xlabel = "time, "*L"t", title = L"\mu_t", lw = 2,  
     color = colors[1], legend = nothing)
@@ -127,7 +129,7 @@ function condCov(param, state, t)
 end
 
 # #### Setting up data as grouped data
-nPerGroup = 3
+nPerGroup = 1
 Y, Z, groupSizes = splitEqualGroups(y, X, nPerGroup)
 Zmean = Z[1]
 Zprec = Z[2]
@@ -158,7 +160,7 @@ algoSettings = (
     stateSamplingMethod = :pgas,# Algorithm to sample the state
     nParticles = 200,           # Number of particles if using PGAS
     nIter = 1000,               # Number of iterations in the Gibbs sampler
-    nBurn = 1000,               # Number of burn-in iterations
+    nBurn = 5000,               # Number of burn-in iterations
     nMaxIter = 10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS = 500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod = eps(),       # Offset for log-volatility
@@ -180,8 +182,10 @@ plot(plt..., layout = (2,2), size = (1400, 1000), xlabel = "time",
 # ### Laplace approximation
 algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_laplace)
 
-θpost, Hpost, ϕpost, σ²ₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
     algoSettings);
+
+println("Laplace failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories")
 
 Laplace_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
 PlotPostParamEvolution!(plt, Laplace_quantiles, "Laplace", groupSizes; 

@@ -88,7 +88,7 @@ end
 
 # #### Setting up data as grouped data
 # #### Setting up data as grouped data
-nPerGroup = 3
+nPerGroup = 1
 Y, Zmean, groupSizes = splitEqualGroups(y, X, nPerGroup)
 
 # Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
@@ -131,8 +131,10 @@ plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time",
 # ### Laplace approximation
 algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_laplace)
 
-θpost, Hpost, ϕpost, σ²ₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
     algoSettings);
+
+println("Laplace failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories")
 
 Laplace_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
 PlotPostParamEvolution!(plt, Laplace_quantiles, "Laplace"; 

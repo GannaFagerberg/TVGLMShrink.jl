@@ -70,6 +70,8 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
         end
     end
 
+    nFailure = Ref(0) 
+
     progressMessage = "Sampling progress: "
     @showprogress desc=progressMessage for i in 1:(nBurn + nIter)
         
@@ -77,11 +79,11 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
         LogVol2Covs!(param.Σᵥ, H) 
 
         if stateSamplingMethod == :ffbs_laplace
-            θ = FFBS_laplace(U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param; 
-                max_iter = nMaxIter)
+            FFBS_laplace!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param; 
+                max_iter = nMaxIter, nFailure = nFailure)
         elseif stateSamplingMethod == :ffbs_slr
-            θ = FFBS_SLR(U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,
-                    nMaxIter, 1; α = 1, β = 0, κ = 0, sample_t0 = true)
+            FFBS_SLR!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,
+                    nMaxIter; α = 1, β = 0, κ = 0, sample_t0 = true)
         elseif stateSamplingMethod == :pgas
             θ = PGASsimulate!(θparticles, Y, p, nParticles, param, 
                 prior, transition, observation, initialization, systematic, θ) 
@@ -104,6 +106,6 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
         end
     end
     
-    return θpost, Hpost, ϕpost, σ²ₙpost, μpost
+    return θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure
 
 end

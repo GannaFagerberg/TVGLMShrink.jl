@@ -23,6 +23,8 @@ gr(legend = :topleft, grid = false, color = colors[2], lw = 2, legendfontsize=12
     xtickfontsize=12, ytickfontsize=12, xguidefontsize=12, yguidefontsize=12,
     titlefontsize = 18, markerstrokecolor = :auto)
 
+figFolder = joinpath(@__DIR__,"figs/")
+
 Random.seed!(12345);
 
 
@@ -106,7 +108,7 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod = :pgas, #:ffbs_laplace, # Algorithm to sample the state
     nParticles = 200,           # Number of particles if using PGAS
-    nIter = 1000,               # Number of iterations in the Gibbs sampler
+    nIter = 5000,               # Number of iterations in the Gibbs sampler
     nBurn = 1000,               # Number of burn-in iterations
     nMaxIter = 10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS = 500,             # Number of pre-PGAS iterations to initialize the particles
@@ -127,8 +129,10 @@ plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time",
 # ### Laplace approximation
 algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_laplace)
 
-θpost, Hpost, ϕpost, σ²ₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
     algoSettings);
+
+println("Laplace failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories") 
 
 Laplace_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
 PlotPostParamEvolution!(plt, Laplace_quantiles, "Laplace", groupSizes; 
@@ -150,3 +154,5 @@ PlotPostParamEvolution!(plt, IPLF_quantiles, "IPLF($(algoSettings.nMaxIter))",
     dateVec = nothing, interval_style = :solid, lw = 2, c = colors[1])
 plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time", 
     bottommargin = 5mm, ylims = [-1.5,1.5], legend = :bottomleft)
+
+savefig(figFolder*"PoisSimGroup1.pdf")
