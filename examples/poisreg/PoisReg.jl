@@ -23,7 +23,7 @@ gr(legend = :topleft, grid = false, color = colors[2], lw = 2, legendfontsize=12
     xtickfontsize=12, ytickfontsize=12, xguidefontsize=12, yguidefontsize=12,
     titlefontsize = 18, markerstrokecolor = :auto)
 
-figFolder = joinpath(@__DIR__,"figs/")
+figFolder = joinpath(@__DIR__)
 
 Random.seed!(12345);
 
@@ -31,7 +31,10 @@ Random.seed!(12345);
 # ### Simulate data from the Poisson regression model with fixed parameter paths
 T = 500;
 p = 3;      # Number of parameters, including intercept
-X = [ones(T+1) randn(T+1, p-1)]; # Design matrix
+X = ones(T+1); # Design matrix
+for i = 1:(p-1)
+    X = hcat(X, simulateAR(T+1, [0.7], 1, 0))
+end
 y = zeros(Int, T+1)
 β = zeros(T+1,p) # Store the regression parameters
 β[1,:] = [0.0, 0.0, 0.5]
@@ -113,12 +116,15 @@ algoSettings = (
     nMaxIter = 10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS = 500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod = eps(),       # Offset for log-volatility
-    h_upper = Inf               # Upper bound for log-volatility
+    h_upper = Inf,               # Upper bound for log-volatility
+    polyaoffset = 0.0           # Offset for Polya-Gamma variables in the update of h_t
 );
 
 # ### PGAS 
-θpost, Hpost, ϕpost, σ²ₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
     algoSettings);
+
+println("PGAS failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories") 
 
 PGAS_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
 PlotPostParamEvolution!(plt, PGAS_quantiles, "PGAS($(algoSettings.nParticles))",
@@ -145,8 +151,10 @@ plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time",
 # ### Iterated Posterior linearization filter
 algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_slr)
 
-θpost, Hpost, ϕpost, σ²ₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
     algoSettings);
+
+println("IPLF failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories") 
 
 IPLF_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
 PlotPostParamEvolution!(plt, IPLF_quantiles, "IPLF($(algoSettings.nMaxIter))",
@@ -154,5 +162,24 @@ PlotPostParamEvolution!(plt, IPLF_quantiles, "IPLF($(algoSettings.nMaxIter))",
     dateVec = nothing, interval_style = :solid, lw = 2, c = colors[1])
 plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time", 
     bottommargin = 5mm, ylims = [-1.5,1.5], legend = :bottomleft)
+
+
+
+# ### Monte Carlo sampling
+runMonteCarlo = false # slow
+if runMonteCarlo
+    algoSettings = (; algoSettings..., stateSamplingMethod = :montecarlo)
+
+    θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
+        algoSettings);
+
+    println("Monte Carlo failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories") 
+
+    MC_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
+    PlotPostParamEvolution!(plt, MC_quantiles, "MC($(algoSettings.nMaxIter))", 
+        groupSizes; dateVec = nothing, interval_style = :solid, lw = 2, c = colors[4])
+    plot(plt..., layout = (2,2), size = (1400, 1000), xlabel = "time", 
+        bottommargin = 5mm, legend = :bottomleft)
+end
 
 savefig(figFolder*"PoisSimGroup1.pdf")

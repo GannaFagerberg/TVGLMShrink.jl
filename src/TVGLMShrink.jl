@@ -11,6 +11,6 @@ include("TVGLMPlots.jl")
 export PlotPostParamEvolution!
 
 include("TVGLMUtils.jl")
-export exp_lin, exp_lin_inv
+export exp_lin, exp_lin_inv, simulateAR
 
 end

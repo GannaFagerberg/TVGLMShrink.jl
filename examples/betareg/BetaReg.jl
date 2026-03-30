@@ -22,8 +22,21 @@ BetaMean(μ, ψ) = Beta(5.0e-5 + μ*ψ, 5.0e-5 + (1-μ)*ψ)
 T = 500;
 p = 3; # Number of covariate in μ, including intercept
 q = 1; # Number of covariates in ψ, including intercept
-Xmean = [ones(T+1) randn(T+1, p-1)]; # Design matrix
-Xprec = [ones(T+1) randn(T+1, q-1)];                 # Design matrix for precision
+
+Xmean = ones(T+1); # Design matrix
+Xprec = ones(T+1); # Design matrix for precision
+iid = true
+if iid 
+    Xmean = hcat(Xmean, randn(T+1, p-1))
+    Xprec = hcat(Xprec, randn(T+1, q-1))
+else
+    for i = 1:(p-1)
+        Xmean = hcat(Xmean, simulateAR(T+1, [0.7], 1, 0))
+    end
+    for i = 1:(q-1)
+        Xprec = hcat(Xprec, simulateAR(T+1, [0.7], 1, 0))
+    end
+end
 y = zeros(Float64, T+1)
 β = zeros(T+1,p) # Store the regression parameters
 γ = zeros(T+1,q) # Store the precision parameters
@@ -35,7 +48,16 @@ invlinkmean_dgp(x) = logistic(x) # Inverse link function for Beta regression
 invlinkprec_dgp(x) = exp(x) # Inverse link function for Beta regression
 for t in 2:(T+1)
     β[t,1] = 0.5*sin(2π*t/T)
-    β[t,2] = (t/T)^2
+    #β[t,2] = (t/T)^2
+    if t < T/3
+        β[t,2] = 0
+    else 
+        if t < ((2/3)*T)
+            β[t,2] = -1
+        else
+            β[t,2] = 1
+        end
+    end
     β[t,3] = -0.5
     γ[t,1] = 1.0
     μtime[t] = invlinkmean_dgp(Xmean[t,:]⋅β[t,:])
@@ -164,12 +186,15 @@ algoSettings = (
     nMaxIter = 10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS = 500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod = eps(),       # Offset for log-volatility
-    h_upper = Inf               # Upper bound for log-volatility
+    h_upper = Inf,              # Upper bound for log-volatility
+    polyaoffset = 0.0           # Offset for Polya-Gamma variables in the update of h_t
 );
 
 # ### PGAS 
-θpost, Hpost, ϕpost, σ²ₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
     algoSettings);
+
+println("PGAS failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories") 
 
 PGAS_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
 PlotPostParamEvolution!(plt, PGAS_quantiles, "PGAS($(algoSettings.nParticles))",    
@@ -197,8 +222,10 @@ plot(plt..., layout = (2,2), size = (1400, 1000), xlabel = "time",
 # ### Iterated Posterior linearization filter
 algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_slr)
 
-θpost, Hpost, ϕpost, σ²ₙpost, μpost = GibbsTVGLM(Y, priorSettings, modelSettings, 
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
     algoSettings);
+
+println("IPLF failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories") 
 
 IPLF_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
 PlotPostParamEvolution!(plt, IPLF_quantiles, "IPLF($(algoSettings.nMaxIter))", 
@@ -206,3 +233,19 @@ PlotPostParamEvolution!(plt, IPLF_quantiles, "IPLF($(algoSettings.nMaxIter))",
     dateVec = nothing, interval_style = :solid, lw = 2, c = colors[1])
 plot(plt..., layout = (2,2), size = (1400, 1000), xlabel = "time", 
     bottommargin = 5mm, legend = :bottomleft)
+
+
+# ### Monte Carlo sampling
+algoSettings = (; algoSettings..., stateSamplingMethod = :montecarlo)
+
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
+    algoSettings);
+
+println("Monte Carlo failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories") 
+
+MC_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
+PlotPostParamEvolution!(plt, MC_quantiles, "MC($(algoSettings.nMaxIter))", 
+    groupSizes; dateVec = nothing, interval_style = :solid, lw = 2, c = colors[4])
+plot(plt..., layout = (2,2), size = (1400, 1000), xlabel = "time", 
+    bottommargin = 5mm, legend = :bottomleft)
+

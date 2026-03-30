@@ -14,14 +14,17 @@ gr(legend = :topleft, grid = false, color = colors[2], lw = 2, legendfontsize=12
 
 Random.seed!(12345);
 
-figFolder = joinpath(@__DIR__,"figs/")
+figFolder = joinpath(@__DIR__)
 
 BetaMean(μ, ψ) = Beta(eps() + μ*ψ, eps() + (1-μ)*ψ)
 
 # ### Simulate data from the Beta regression model with fixed parameter paths
 T = 500;
 p = 3; # Number of parameters, including intercept
-X = [ones(T+1) randn(T+1, p-1)]; # Design matrix
+X = ones(T+1); # Design matrix
+for i = 1:(p-1)
+    X = hcat(X, simulateAR(T+1, [0.7], 1, 0))
+end
 y = zeros(Float64, T+1)
 β = zeros(T+1,p) # Store the regression parameters
 β[1,:] = [0.0, 0.0, 0.5]
@@ -113,7 +116,8 @@ algoSettings = (
     nMaxIter = 10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS = 500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod = eps(),       # Offset for log-volatility
-    h_upper = Inf               # Upper bound for log-volatility
+    h_upper = Inf,              # Upper bound for log-volatility
+    polyaoffset = 0.0           # Offset for Polya-Gamma variables in the update of h_t
 );
 
 # ### PGAS 

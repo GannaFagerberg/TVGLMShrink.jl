@@ -32,7 +32,8 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
     σ²ₙpost = zeros(p, nIter) # Store variance in log-volatility evolution
     μpost = zeros(p, nIter) # Store mean in log-volatility evolution
     
-    offset = (offsetMethod == "kowal") ? eps()*ones(T,p) : offsetMethod 
+    offset = (offsetMethod == "kowal") ? eps()*ones(T,p) : fill(offsetMethod, T, p)
+
     P = zeros(T, nMixComp) # storage for mixture component probabilities
 
     ## Set up state-space model
@@ -83,10 +84,14 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
                 max_iter = nMaxIter, nFailure = nFailure)
         elseif stateSamplingMethod == :ffbs_slr
             FFBS_SLR!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,
-                    nMaxIter; α = 1, β = 0, κ = 0, sample_t0 = true)
+                    nMaxIter; α = 1, β = 0, κ = 0, sample_t0 = true, nFailure = nFailure)
         elseif stateSamplingMethod == :pgas
             θ = PGASsimulate!(θparticles, Y, p, nParticles, param, 
-                prior, transition, observation, initialization, systematic, θ) 
+                prior, transition, observation, initialization, systematic, θ, 
+                nFailure = nFailure) 
+        elseif stateSamplingMethod == :montecarlo
+            FFBS_montecarlo!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param; 
+                nMC = 500, nFailure = nFailure)
         else
             error("Only :ffbs_laplace or :pgas are implemented yet.")
         end
