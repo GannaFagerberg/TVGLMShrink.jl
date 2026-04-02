@@ -6,5 +6,7 @@
 - Added Unemployment data
 - Added the option for AR(1) covariates in the example files.
 - Created the CHANGELOG.md (this file)
+- Added a .JuliaFormatter.toml for formatting the code.
+
 
 [0.1.2]: https://github.com/compbayes/TVGLMShrink.jl/compare/v0.1.1...v0.1.2
