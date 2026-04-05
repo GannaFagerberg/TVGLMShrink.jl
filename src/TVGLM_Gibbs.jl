@@ -7,7 +7,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
     T = length(Y)
     ϕ₀, κ₀, m₀, σ₀, ν₀, ψ₀, μ₀, Σ₀ = priorSettings
     stateSamplingMethod, nParticles, nIter, nBurn, nMaxIter, nPrePGAS, 
-        offsetMethod, h_upper, scaling = algoSettings 
+        offsetMethod, h_upper, polyaoffset, scaling = algoSettings 
     observation, param, condMean, condCov, α, β, updateσₙ, nMixComp = modelSettings
     p = length(μ₀) # number of states
 
@@ -109,8 +109,9 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
         ν = diff(θ, dims = 1) * inv(scaling)
         
         setOffset!(offset, ν, offsetMethod)
+
         update_dsp!(ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings, mixture, Dᵩ,
-            offset, α, β, updateσₙ, h_upper)
+            offset, α, β, updateσₙ, h_upper, polyaoffset)
 
         if i > nBurn
             θpost[:, :, i - nBurn] = θ
