@@ -7,7 +7,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
     T = length(Y)
     ϕ₀, κ₀, m₀, σ₀, ν₀, ψ₀, μ₀, Σ₀ = priorSettings
     stateSamplingMethod, nParticles, nIter, nBurn, nMaxIter, nPrePGAS, 
-        offsetMethod, h_upper = algoSettings 
+        offsetMethod, h_upper, scaling = algoSettings 
     observation, param, condMean, condCov, α, β, updateσₙ, nMixComp = modelSettings
     p = length(μ₀) # number of states
 
@@ -53,7 +53,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
             algoSettingsInit = (stateSamplingMethod = :ffbs_laplace, 
                 nParticles = nParticles, nIter = nPrePGAS, 
                 nBurn = round(Int, 0.1*nPrePGAS), nMaxIter = nMaxIter, 
-                nPrePGAS = 0, offsetMethod = offsetMethod, h_upper = h_upper)
+                nPrePGAS = 0, offsetMethod = offsetMethod, h_upper = h_upper, scaling = scaling)
             θpost0, Hpost0, ϕpost0, σ²ₙpost0, μpost0 = GibbsTVGLM(Y, priorSettings, 
                 modelSettings, algoSettingsInit);
             μ_prop = median(θpost0[1,:,:], dims = 2)[:]
@@ -79,6 +79,15 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
         ## Draw state 
         LogVol2Covs!(param.Σᵥ, H) 
 
+        if scaling != I(size(scaling, 1))
+            for j in 1:size(H,1)
+                Σ_scaled = scaling * Matrix(param.Σᵥ[j]) * scaling'
+                Σ_scaled = 0.5 * (Σ_scaled + Σ_scaled')
+                param.Σᵥ[j] = PDMat(Σ_scaled)
+            end
+        end
+
+        
         if stateSamplingMethod == :ffbs_laplace
             FFBS_laplace!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param; 
                 max_iter = nMaxIter, nFailure = nFailure)
@@ -97,7 +106,8 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
         end
 
         ## Update the log-volatility evolution
-        ν = diff(θ, dims = 1)
+        ν = diff(θ, dims = 1) * inv(scaling)
+        
         setOffset!(offset, ν, offsetMethod)
         update_dsp!(ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings, mixture, Dᵩ,
             offset, α, β, updateσₙ, h_upper)
