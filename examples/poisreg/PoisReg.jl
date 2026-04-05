@@ -32,12 +32,13 @@ Random.seed!(12345);
 T = 500;
 p = 3;      # Number of parameters, including intercept
 X = ones(T+1); # Design matrix
+σₑ = [1, 10]
 for i = 1:(p-1)
-    X = hcat(X, simulateAR(T+1, [0.7], 1, 0))
+    X = hcat(X, simulateAR(T+1, [0.7], σₑ[i], 0))
 end
 y = zeros(Int, T+1)
 β = zeros(T+1,p) # Store the regression parameters
-β[1,:] = [0.0, 0.0, 0.5]
+β[1,:] = [0.0, 0.0, 0.05]
 invlink_dgp(x) = exp_lin(x) # Inverse link function for Poisson regression
 for t in 2:(T+1)
     β[t,1] = 1*sin(2π*t/T)
@@ -50,11 +51,36 @@ for t in 2:(T+1)
             β[t,2] = 1
         end
     end
-    β[t,3] = 0.5
+    β[t,3] = 0.05
     y[t] = rand(Poisson(invlink_dgp(X[t,:]⋅β[t,:])))
 end
 y = y[2:end];
 X = X[2:end,:];
+
+### Prior for state
+μₘ = mean(y)
+σ²ₘ = var(y) - μₘ
+
+s² = log(σ²ₘ/(μₘ^2) + 1)
+m = log(μₘ) - s²/2
+
+s₀² = log(s²/(m^2) + 1)
+#m₀ = log(m) - s₀²/2
+
+βₘ = [log(m) - s₀²/2, zeros(p-1)...]
+Σₘ = inv(1/T * X[:,2:end]' * Diagonal(exp.(X * βₘ)) * X[:,2:end])
+Σₒ = [s₀²  zeros(1, size(Σₘ,2));
+     zeros(size(Σₘ,1), 1)  Σₘ]
+Σₒ = 0.5 * (Σₒ + Σₒ')
+
+# ### Plot the parameter evolution path of βₜ
+scaled_beta = (inv(sqrt(Σₒ)) * β')'
+
+plt = []
+for j = 1:p
+    push!(plt, plot(scaled_beta[:,j], label = "true", xlabel = "time, "*L"t", 
+        ylabel = "", title = L"\beta_{%$(j-1)}", color = :black, lw = 2))
+end
 
 # ### Plot the parameter evolution path of βₜ and the time series
 plt = []
@@ -76,7 +102,7 @@ priorSettings = (
     ϕ₀ = 0.5, κ₀ = 0.3,         # Prior for ϕ ~ N(ϕ₀, κ₀²)
     m₀ = -15.0, σ₀ = 3.0,       # Prior for μ ~ N(m₀, σ₀²)
     ν₀ = 3.0, ψ₀ = 1.0,         # Prior for σ²ₙ ~ scaled inverse χ²(ν₀, ψ₀)
-    μ₀ = zeros(p), Σ₀ = 10*I(p),# Prior for βₜ at time t=0
+    μ₀ = zeros(p), Σ₀ = 5*I(p),# Prior for βₜ at time t=0
 ); 
 
 # ### Set up the Poisson regression model
@@ -86,12 +112,12 @@ mutable struct ParamTvReg{T, S<:AbstractMatrix{T}}
 end
 
 invlink(x) = exp_lin(x) # inverse link function for Poisson regression
-observation(param, state, t) = product_distribution(Poisson.(invlink.(param.Z[t] * state)))
+observation(param, state, t) = product_distribution(Poisson.(invlink.(param.Z[t] * inv(scaling) * state)))
 condMean(param, state, t) = invlink.(param.Z[t] * state)
 condCov(param, state, t) = diagm(invlink.(param.Z[t] * state))
 
 # #### Setting up data as grouped data
-nPerGroup = 1
+nPerGroup = 5
 Y, Z, groupSizes = splitEqualGroups(y, X, nPerGroup)
 
 # Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
@@ -111,15 +137,16 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod = :pgas, #:ffbs_laplace, # Algorithm to sample the state
     nParticles = 200,           # Number of particles if using PGAS
-    nIter = 5000,               # Number of iterations in the Gibbs sampler
+    nIter = 2000,               # Number of iterations in the Gibbs sampler
     nBurn = 1000,               # Number of burn-in iterations
     nMaxIter = 10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS = 500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod = eps(),       # Offset for log-volatility
     h_upper = Inf,               # Upper bound for log-volatility
-    polyaoffset = 0.0           # Offset for Polya-Gamma variables in the update of h_t
+    polyaoffset = 0.0,           # Offset for Polya-Gamma variables in the update of h_t
+    scaling = inv(sqrt(Σₒ))      # Scaling for the state
 );
-
+scaling = inv(sqrt(Σₒ))
 # ### PGAS 
 θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
     algoSettings);
