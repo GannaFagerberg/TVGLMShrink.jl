@@ -21,6 +21,7 @@ Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
 SMCsamplers = "2328efba-24c2-4a10-a32f-a74f69d05fca"
+StableDistributions = "3756410d-ab6e-41a2-9897-9aa267a7ef31"
 Utils = "a6a4a4df-ba9f-45e9-bafc-bec3296762b9"
 
 [compat]
@@ -39,6 +40,7 @@ Optim = "1.13.3, 2.0"
 PDMats = "0.11.36"
 Plots = "1.41.2"
 ProgressMeter = "1.11.0"
+StableDistributions = "1.0.3"
 julia = "1"
 
 [extras]
