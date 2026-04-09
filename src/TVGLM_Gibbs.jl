@@ -105,8 +105,9 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
             error("Only :ffbs_laplace or :pgas are implemented yet.")
         end
 
+        θ = θ * inv(scaling) 
         ## Update the log-volatility evolution
-        ν = diff(θ, dims = 1) * inv(scaling)
+        ν = diff(θ, dims = 1) #* inv(scaling)
         
         setOffset!(offset, ν, offsetMethod)
 
