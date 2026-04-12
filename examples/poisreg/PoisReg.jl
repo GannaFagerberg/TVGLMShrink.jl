@@ -25,7 +25,7 @@ gr(legend = :topleft, grid = false, color = colors[2], lw = 2, legendfontsize=12
 
 figFolder = joinpath(@__DIR__)
 
-Random.seed!(12345);
+Random.seed!(1234);
 
 
 # ### Simulate data from the Poisson regression model with fixed parameter paths
@@ -33,31 +33,38 @@ T = 500;
 p = 3;      # Number of parameters, including intercept
 X = ones(T+1); # Design matrix
 σₑ = [1, 10]
+mₑ = [0, 10]
 for i = 1:(p-1)
-    X = hcat(X, simulateAR(T+1, [0.7], σₑ[i], 0))
+    X = hcat(X, simulateAR(T+1, [0.7], σₑ[i], mₑ[i]))
 end
 y = zeros(Int, T+1)
 β = zeros(T+1,p) # Store the regression parameters
 β[1,:] = [0.0, 0.0, 0.05]
 invlink_dgp(x) = exp_lin(x) # Inverse link function for Poisson regression
+
+a = 1
+identity_link(x) = log(1+exp(a*x))/a
+invlink_dgp(x) = identity_link(x)
 for t in 2:(T+1)
-    β[t,1] = 1*sin(2π*t/T)
+    β[t,1] =  sin(2π*t/T)#2 * sin(2π*t/T) for softplus
     if t < T/3
         β[t,2] = 0
     else 
         if t < ((2/3)*T)
-            β[t,2] = -1
+            β[t,2] = -1 # -2
         else
-            β[t,2] = 1
+            β[t,2] = 1 # 1
         end
     end
-    β[t,3] = 0.05
+    β[t,3] = 0.05 # -0.1
     y[t] = rand(Poisson(invlink_dgp(X[t,:]⋅β[t,:])))
 end
 y = y[2:end];
 X = X[2:end,:];
+plot(y)
 
-### Prior for state
+
+### Prior for state (exp)
 μₘ = mean(y)
 σ²ₘ = var(y) - μₘ
 
@@ -73,9 +80,27 @@ s₀² = log(s²/(m^2) + 1)
      zeros(size(Σₘ,1), 1)  Σₘ]
 Σₒ = 0.5 * (Σₒ + Σₒ')
 
+### Prior for state (softplus)
+
+μₘ = mean(y)
+σ²ₘ = var(y) - μₘ
+
+aa = μₘ^2/σ²ₘ
+be = σ²ₘ/μₘ
+
+d = Gamma(aa, be)
+l = rand(d, 100000)
+xl = log.(exp.(a*l) .- 1)/a
+
+βₘ = [mean(xl), zeros(p-1)...]
+Σₘ = inv(1/T * X[:,2:end]' * Diagonal(invlink_dgp.(X * βₘ)) * X[:,2:end])
+Σₒ = [var(xl)  zeros(1, size(Σₘ,2));
+     zeros(size(Σₘ,1), 1)  Σₘ]
+Σₒ = 0.5 * (Σₒ + Σₒ')
+
 # ### Plot the parameter evolution path of βₜ
 scaled_beta = (inv(sqrt(Σₒ)) * β')'
-
+scaled_beta = I(p)
 plt = []
 for j = 1:p
     push!(plt, plot(scaled_beta[:,j], label = "true", xlabel = "time, "*L"t", 
@@ -89,7 +114,7 @@ for j = 1:p
         ylabel = "", title = L"\beta_{%$(j-1)}", color = :black, lw = 2))
 end
 plot(plt..., layout = (p,1), size = (1200, 1000), xguidefontsize = 12, 
-    ylim = [-1.5,1.5], yguidefontsize = 14, titlefontsize=20, 
+    yguidefontsize = 14, titlefontsize=20, 
     legend = :bottomleft, margin = 5mm) 
 
 # Plot the time series
@@ -112,9 +137,16 @@ mutable struct ParamTvReg{T, S<:AbstractMatrix{T}}
 end
 
 invlink(x) = exp_lin(x) # inverse link function for Poisson regression
+invlink(x) = identity_link(x) # inverse link function for Poisson regression
+
+#scaling = I(p)
+scaling = inv(sqrt(Σₒ))
+
+scaling = I(p)
 observation(param, state, t) = product_distribution(Poisson.(invlink.(param.Z[t] * inv(scaling) * state)))
-condMean(param, state, t) = invlink.(param.Z[t] * state)
-condCov(param, state, t) = diagm(invlink.(param.Z[t] * state))
+condMean(param, state, t) = invlink.(param.Z[t] * inv(scaling) * state)
+condCov(param, state, t) = diagm(invlink.(param.Z[t] * inv(scaling)* state))
+
 
 # #### Setting up data as grouped data
 nPerGroup = 5
@@ -137,16 +169,15 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod = :pgas, #:ffbs_laplace, # Algorithm to sample the state
     nParticles = 200,           # Number of particles if using PGAS
-    nIter = 2000,               # Number of iterations in the Gibbs sampler
-    nBurn = 1000,               # Number of burn-in iterations
+    nIter = 3000,               # Number of iterations in the Gibbs sampler
+    nBurn = 2000,               # Number of burn-in iterations
     nMaxIter = 10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS = 500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod = eps(),       # Offset for log-volatility
     h_upper = Inf,               # Upper bound for log-volatility
     polyaoffset = 0.0,           # Offset for Polya-Gamma variables in the update of h_t
-    scaling = inv(sqrt(Σₒ))      # Scaling for the state
+    scaling = scaling,      # Scaling for the state
 );
-scaling = inv(sqrt(Σₒ))
 # ### PGAS 
 θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
     algoSettings);
@@ -167,13 +198,12 @@ algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_laplace)
 
 println("Laplace failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories") 
 
+
 Laplace_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
 PlotPostParamEvolution!(plt, Laplace_quantiles, "Laplace", groupSizes; 
     dateVec = nothing, interval_style = :dash, lw = 2, c = colors[3])
 plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time", 
-    bottommargin = 5mm, ylims = [-1.5,1.5], legend = :bottomleft)
-
-
+    bottommargin = 5mm,legend = :bottomleft)
 
 # ### Iterated Posterior linearization filter
 algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_slr)
@@ -188,7 +218,7 @@ PlotPostParamEvolution!(plt, IPLF_quantiles, "IPLF($(algoSettings.nMaxIter))",
     groupSizes; 
     dateVec = nothing, interval_style = :solid, lw = 2, c = colors[1])
 plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time", 
-    bottommargin = 5mm, ylims = [-1.5,1.5], legend = :bottomleft)
+    bottommargin = 5mm, legend = :bottomleft)
 
 
 

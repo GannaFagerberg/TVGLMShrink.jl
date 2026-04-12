@@ -22,30 +22,34 @@ BetaMean(μ, ψ) = Beta(5.0e-5 + μ*ψ, 5.0e-5 + (1-μ)*ψ)
 T = 500;
 p = 3; # Number of covariate in μ, including intercept
 q = 1; # Number of covariates in ψ, including intercept
+σₑ = [1, 10]
 
 Xmean = ones(T+1); # Design matrix
 Xprec = ones(T+1); # Design matrix for precision
+μₑ = [0.0,10.0]
 iid = true
 if iid 
-    Xmean = hcat(Xmean, randn(T+1, p-1))
+    Xmean = hcat(Xmean, randn(T+1, 1), rand(Normal(10, 10), T+1, 1))
     Xprec = hcat(Xprec, randn(T+1, q-1))
 else
     for i = 1:(p-1)
-        Xmean = hcat(Xmean, simulateAR(T+1, [0.7], 1, 0))
+        Xmean = hcat(Xmean, simulateAR(T+1, [0.7], σₑ[i], μₑ[i]))
     end
     for i = 1:(q-1)
-        Xprec = hcat(Xprec, simulateAR(T+1, [0.7], 1, 0))
+        Xprec = hcat(Xprec, simulateAR(T+1, [0.7], σₑ[1], 0))
     end
 end
 y = zeros(Float64, T+1)
 β = zeros(T+1,p) # Store the regression parameters
 γ = zeros(T+1,q) # Store the precision parameters
-β[1,:] = [0, 0, -0.5]
+β[1,:] = [0, 0, -0.05]
 γ[1,:] = [1] # log precision intercept
 μtime = zeros(T+1)
 ψtime = zeros(T+1)
+logistic(x) = 1/(1+exp(-x))
 invlinkmean_dgp(x) = logistic(x) # Inverse link function for Beta regression
 invlinkprec_dgp(x) = exp(x) # Inverse link function for Beta regression
+
 for t in 2:(T+1)
     β[t,1] = 0.5*sin(2π*t/T)
     #β[t,2] = (t/T)^2
@@ -58,8 +62,13 @@ for t in 2:(T+1)
             β[t,2] = 1
         end
     end
-    β[t,3] = -0.5
+    β[t,3] = -0.1
     γ[t,1] = 1.0
+    #if t < T/2
+    #    γ[t,2] = 0.5
+    #else
+    #    γ[t,2] = -0.5
+    #end
     μtime[t] = invlinkmean_dgp(Xmean[t,:]⋅β[t,:])
     ψtime[t] = invlinkprec_dgp(Xprec[t,:]⋅γ[t,:])
     y[t] = rand(BetaMean(μtime[t], ψtime[t]))
@@ -74,9 +83,6 @@ Xprec = Xprec[2:end,:];
 X = [Xmean, Xprec]
 p = size(X[1], 2)
 q = size(X[2], 2)
-
-
-
 # plot \mu and \psi time series
 p1 = plot(μtime, xlabel = "time, "*L"t", title = L"\mu_t", lw = 2,  
     color = colors[1], legend = nothing)
@@ -103,7 +109,7 @@ for j = 1:q
     push!(plt, plot(γ[:,j], label = "true", xlabel = "time, "*L"t", 
         ylabel = "", title = L"\gamma_{%$(j-1)}", color = :black, lw = 2))
 end
-plot(plt..., layout = (2,2), size = (1200, 1000), xguidefontsize = 12, 
+plot(plt..., layout = (3,2), size = (1200, 1000), xguidefontsize = 12, 
     yguidefontsize = 14, titlefontsize=20, 
     legend = :bottomleft, margin = 5mm) 
 
@@ -127,6 +133,48 @@ plot(p1, p2, layout = (2,1), size = (800,800),
     xguidefontsize = 12, yguidefontsize = 14, titlefontsize=18, margin = 5mm)
 
 
+#### scaling
+logit(x) = log(x ./ (1 .- x))
+E_μ = mean(y)
+c = mean(1 ./ (ψtime .+ 1))
+V_μ = (var(y) - c * (E_μ - E_μ^2))/(1-c)
+phi = (E_μ*(1-E_μ)/V_μ - 1)
+μ_sim = rand(BetaMean(E_μ, phi), 1000000)
+
+
+βₘ = [mean(logit.(μ_sim)), zeros(p-1)...]
+Σₘ = inv(1/T * Xmean[:,2:end]' * Diagonal(invlinkmean_dgp.(Xmean * βₘ)) * Xmean[:,2:end])
+Σₒ = [var(logit.(μ_sim))  zeros(1, size(Σₘ,2));
+     zeros(size(Σₘ,1), 1)  Σₘ]
+Σₒ = 0.5 * (Σₒ + Σₒ')
+scaling_mean = inv(sqrt(Σₒ))
+
+
+s² = log(var(ψtime)/(mean(ψtime)^2) + 1)
+m = log(mean(ψtime)) - s²/2
+
+s₀² = log(s²/(m^2) + 1)
+#m₀ = log(m) - s₀²/2
+
+βᵩ = [log(m) - s₀²/2, zeros(q-1)...]
+Σᵩ = inv(1/T * Xprec[:,2:end]' * Diagonal(invlinkprec_dgp.(Xprec * βᵩ)) * Xprec[:,2:end])
+Σᵩ₀ = [s₀²  zeros(1, size(Σᵩ,2));
+     zeros(size(Σᵩ,1), 1)  Σᵩ]
+Σᵩ₀ = 0.5 * (Σᵩ₀ + Σᵩ₀')
+
+scaling_prec = inv(sqrt(Σᵩ₀))
+scaling = [inv(sqrt(Σₒ))  zeros(size(Σₒ, 1), q);
+         zeros(q, size(Σₒ, 1))  inv(sqrt(Σᵩ₀))]
+
+scaling_mean = inv(sqrt(Σₒ))
+scaling_prec = 1
+scaling = [inv(sqrt(Σₒ))  zeros(size(Σₒ, 1), q);
+         zeros(q, size(Σₒ, 1)) 1]
+
+scaling = I(p+q)
+scaling_mean = I(p)
+scaling_prec = I(q)
+
 # ### Set up the Beta regression model
 mutable struct ParamTvReg{T, S<:AbstractMatrix{T}}
     Σᵥ::Vector{PDMat{T,S}}
@@ -139,8 +187,8 @@ invlinkprecision(x) = exp(x) # inverse link function for ψ in Beta regression
 observation(param, state, t) = 
     product_distribution(
         BetaMean.(
-            invlinkmean.(param.Zmean[t] * state[1:p]), 
-            invlinkprecision.(param.Zprec[t] * state[(p+1):(p+q)])
+            invlinkmean.(param.Zmean[t] * inv(scaling_mean) * state[1:p]), 
+            invlinkprecision.(param.Zprec[t] * inv(scaling_prec) * state[(p+1):(p+q)])
         )
     )
 condMean(param, state, t) = invlinkmean.(param.Zmean[t] * state[1:p])
@@ -151,7 +199,7 @@ function condCov(param, state, t)
 end
 
 # #### Setting up data as grouped data
-nPerGroup = 1
+nPerGroup = 5
 Y, Z, groupSizes = splitEqualGroups(y, X, nPerGroup)
 Zmean = Z[1]
 Zprec = Z[2]
@@ -162,9 +210,9 @@ param = ParamTvReg(LogVol2Covs(zeros(length(groupSizes),p+q)), Zmean, Zprec)
 # ### Set up the prior, model and algorithm settings
 priorSettings = (
     ϕ₀ = 0.5, κ₀ = 0.3,             # Prior for ϕ ~ N(ϕ₀, κ₀²)
-    m₀ = -10.0, σ₀ = 3.0,           # Prior for μ ~ N(m₀, σ₀²)
+    m₀ = -15.0, σ₀ = 3.0,           # Prior for μ ~ N(m₀, σ₀²)
     ν₀ = 3.0, ψ₀ = 1,               # Prior for σ²ₙ ~ scaled inverse χ²(ν₀, ψ₀)
-    μ₀ = zeros(p+q), Σ₀ = 1*I(p+q), # Prior for βₜ at time t=0
+    μ₀ = zeros(p+q), Σ₀ = 5*I(p+q), # Prior for βₜ at time t=0
 ); 
 
 modelSettings = (
@@ -182,13 +230,14 @@ algoSettings = (
     stateSamplingMethod = :pgas,# Algorithm to sample the state
     nParticles = 200,           # Number of particles if using PGAS
     nIter = 1000,               # Number of iterations in the Gibbs sampler
-    nBurn = 5000,               # Number of burn-in iterations
+    nBurn = 1000,               # Number of burn-in iterations
     nMaxIter = 10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS = 500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod = eps(),       # Offset for log-volatility
     h_upper = Inf,              # Upper bound for log-volatility
-    polyaoffset = 0.0           # Offset for Polya-Gamma variables in the update of h_t
-);
+    polyaoffset = 0.0,           # Offset for Polya-Gamma variables in the update of h_t
+    scaling = scaling          # Scaling for the state
+    );
 
 # ### PGAS 
 θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
@@ -215,8 +264,8 @@ println("Laplace failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIt
 Laplace_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
 PlotPostParamEvolution!(plt, Laplace_quantiles, "Laplace", groupSizes; 
     dateVec = nothing, interval_style = :dash, lw = 2, c = colors[3])
-plot(plt..., layout = (2,2), size = (1400, 1000), xlabel = "time", 
-    bottommargin = 5mm, ylims = [-1.5,1.5], legend = :bottomleft)
+plot(plt..., layout = (3,2), size = (1400, 1000), xlabel = "time", 
+    bottommargin = 5mm,legend = :bottomleft)
 
 
 # ### Iterated Posterior linearization filter
