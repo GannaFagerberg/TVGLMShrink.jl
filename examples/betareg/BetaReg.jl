@@ -147,7 +147,7 @@ phi = (E_μ*(1-E_μ)/V_μ - 1)
 Σₒ = [var(logit.(μ_sim))  zeros(1, size(Σₘ,2));
      zeros(size(Σₘ,1), 1)  Σₘ]
 Σₒ = 0.5 * (Σₒ + Σₒ')
-scaling_mean = inv(sqrt(Σₒ))
+scaling_mean = sqrt(Σₒ)
 
 
 s² = log(var(ψtime)/(mean(ψtime)^2) + 1)
@@ -162,19 +162,26 @@ s₀² = log(s²/(m^2) + 1)
      zeros(size(Σᵩ,1), 1)  Σᵩ]
 Σᵩ₀ = 0.5 * (Σᵩ₀ + Σᵩ₀')
 
-scaling_prec = inv(sqrt(Σᵩ₀))
-scaling = [inv(sqrt(Σₒ))  zeros(size(Σₒ, 1), q);
-         zeros(q, size(Σₒ, 1))  inv(sqrt(Σᵩ₀))]
+scaling_prec = sqrt(Σᵩ₀)
+scaling = [sqrt(Σₒ)  zeros(size(Σₒ, 1), q);
+         zeros(q, size(Σₒ, 1))  sqrt(Σᵩ₀)]
 
-scaling_mean = inv(sqrt(Σₒ))
+## Origianl phi
+scaling_mean = sqrt(Σₒ)
 scaling_prec = 1
-scaling = [inv(sqrt(Σₒ))  zeros(size(Σₒ, 1), q);
+scaling = [sqrt(Σₒ)  zeros(size(Σₒ, 1), q);
          zeros(q, size(Σₒ, 1)) 1]
 
+## Original 
 scaling = I(p+q)
 scaling_mean = I(p)
 scaling_prec = I(q)
 
+#scaling = [sqrt(1/T * Info[2]) zeros(size(Σₒ, 1), q);
+#         zeros(q, size(Σₒ, 1)) 1]
+
+#scaling_mean = sqrt(1/T * Info[2])
+#scaling_prec = 0.1 #sqrt(1/T * Info[3])
 # ### Set up the Beta regression model
 mutable struct ParamTvReg{T, S<:AbstractMatrix{T}}
     Σᵥ::Vector{PDMat{T,S}}
@@ -187,8 +194,8 @@ invlinkprecision(x) = exp(x) # inverse link function for ψ in Beta regression
 observation(param, state, t) = 
     product_distribution(
         BetaMean.(
-            invlinkmean.(param.Zmean[t] * inv(scaling_mean) * state[1:p]), 
-            invlinkprecision.(param.Zprec[t] * inv(scaling_prec) * state[(p+1):(p+q)])
+            invlinkmean.(param.Zmean[t] * state[1:p]), 
+            invlinkprecision.(10 * param.Zprec[t] * state[(p+1):(p+q)])
         )
     )
 condMean(param, state, t) = invlinkmean.(param.Zmean[t] * state[1:p])
@@ -212,7 +219,7 @@ priorSettings = (
     ϕ₀ = 0.5, κ₀ = 0.3,             # Prior for ϕ ~ N(ϕ₀, κ₀²)
     m₀ = -15.0, σ₀ = 3.0,           # Prior for μ ~ N(m₀, σ₀²)
     ν₀ = 3.0, ψ₀ = 1,               # Prior for σ²ₙ ~ scaled inverse χ²(ν₀, ψ₀)
-    μ₀ = zeros(p+q), Σ₀ = 5*I(p+q), # Prior for βₜ at time t=0
+    μ₀ = zeros(p+q), Σ₀ = Diagonal(5 * ones(p+q)), # Prior for βₜ at time t=0
 ); 
 
 modelSettings = (
@@ -229,8 +236,8 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod = :pgas,# Algorithm to sample the state
     nParticles = 200,           # Number of particles if using PGAS
-    nIter = 1000,               # Number of iterations in the Gibbs sampler
-    nBurn = 1000,               # Number of burn-in iterations
+    nIter = 2000,               # Number of iterations in the Gibbs sampler
+    nBurn = 2000,               # Number of burn-in iterations
     nMaxIter = 10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS = 500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod = eps(),       # Offset for log-volatility
@@ -264,7 +271,7 @@ println("Laplace failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIt
 Laplace_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
 PlotPostParamEvolution!(plt, Laplace_quantiles, "Laplace", groupSizes; 
     dateVec = nothing, interval_style = :dash, lw = 2, c = colors[3])
-plot(plt..., layout = (3,2), size = (1400, 1000), xlabel = "time", 
+plot(plt..., layout = (2,2), size = (1400, 1000), xlabel = "time", 
     bottommargin = 5mm,legend = :bottomleft)
 
 

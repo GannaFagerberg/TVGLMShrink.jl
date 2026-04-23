@@ -53,7 +53,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
             algoSettingsInit = (stateSamplingMethod = :ffbs_laplace, 
                 nParticles = nParticles, nIter = nPrePGAS, 
                 nBurn = round(Int, 0.1*nPrePGAS), nMaxIter = nMaxIter, 
-                nPrePGAS = 0, offsetMethod = offsetMethod, h_upper = h_upper, scaling = scaling)
+                nPrePGAS = 0, offsetMethod = offsetMethod, h_upper = h_upper, polyaoffset = polyaoffset, scaling = scaling)
             θpost0, Hpost0, ϕpost0, σ²ₙpost0, μpost0 = GibbsTVGLM(Y, priorSettings, 
                 modelSettings, algoSettingsInit);
             μ_prop = median(θpost0[1,:,:], dims = 2)[:]

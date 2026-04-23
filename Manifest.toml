@@ -2,7 +2,7 @@
 
 julia_version = "1.12.4"
 manifest_format = "2.0"
-project_hash = "1c642da3dee8b46a66cf473eceb0af5247ed7a60"
+project_hash = "6ab25283087038fc263cf18113c9d425a50dc780"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "f7304359109c768cf32dc5fa2d371565bb63b68a"
@@ -1677,7 +1677,7 @@ uuid = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 version = "1.0.3"
 
 [[deps.TVGLMShrink]]
-deps = ["BandedMatrices", "BenchmarkTools", "CSV", "DataFrames", "Distributions", "DynamicGlobalLocalShrinkage", "ForwardDiff", "LaTeXStrings", "LinearAlgebra", "LogExpFunctions", "Measures", "Optim", "PDMats", "Plots", "ProgressMeter", "Revise", "SMCsamplers", "Utils"]
+deps = ["BandedMatrices", "BenchmarkTools", "CSV", "DataFrames", "Distributions", "DynamicGlobalLocalShrinkage", "ForwardDiff", "LaTeXStrings", "LinearAlgebra", "LogExpFunctions", "Measures", "Optim", "PDMats", "Plots", "ProgressMeter", "Revise", "SMCsamplers", "StableDistributions", "Utils"]
 path = "."
 uuid = "f0ebfa52-c0a7-45a5-a670-9dbd11d4b463"
 version = "0.1.3"

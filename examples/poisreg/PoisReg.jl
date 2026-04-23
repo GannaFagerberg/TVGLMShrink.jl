@@ -37,14 +37,14 @@ mₑ = [0, 10]
 for i = 1:(p-1)
     X = hcat(X, simulateAR(T+1, [0.7], σₑ[i], mₑ[i]))
 end
-y = zeros(Int, T+1)
+y = zeros(T+1)
 β = zeros(T+1,p) # Store the regression parameters
 β[1,:] = [0.0, 0.0, 0.05]
 invlink_dgp(x) = exp_lin(x) # Inverse link function for Poisson regression
 
-a = 1
-identity_link(x) = log(1+exp(a*x))/a
-invlink_dgp(x) = identity_link(x)
+#softplus_link(x) = log(1+exp(x))
+#invlink_dgp(x) = softplus_link(x)
+
 for t in 2:(T+1)
     β[t,1] =  sin(2π*t/T)#2 * sin(2π*t/T) for softplus
     if t < T/3
@@ -57,7 +57,7 @@ for t in 2:(T+1)
         end
     end
     β[t,3] = 0.05 # -0.1
-    y[t] = rand(Poisson(invlink_dgp(X[t,:]⋅β[t,:])))
+    y[t] = rand(Poisson(invlink_dgp((X[t,:]⋅β[t,:]))))
 end
 y = y[2:end];
 X = X[2:end,:];
@@ -90,7 +90,7 @@ be = σ²ₘ/μₘ
 
 d = Gamma(aa, be)
 l = rand(d, 100000)
-xl = log.(exp.(a*l) .- 1)/a
+xl = log.(exp.(l) .- 1)
 
 βₘ = [mean(xl), zeros(p-1)...]
 Σₘ = inv(1/T * X[:,2:end]' * Diagonal(invlink_dgp.(X * βₘ)) * X[:,2:end])
@@ -98,14 +98,6 @@ xl = log.(exp.(a*l) .- 1)/a
      zeros(size(Σₘ,1), 1)  Σₘ]
 Σₒ = 0.5 * (Σₒ + Σₒ')
 
-# ### Plot the parameter evolution path of βₜ
-scaled_beta = (inv(sqrt(Σₒ)) * β')'
-scaled_beta = I(p)
-plt = []
-for j = 1:p
-    push!(plt, plot(scaled_beta[:,j], label = "true", xlabel = "time, "*L"t", 
-        ylabel = "", title = L"\beta_{%$(j-1)}", color = :black, lw = 2))
-end
 
 # ### Plot the parameter evolution path of βₜ and the time series
 plt = []
@@ -137,16 +129,11 @@ mutable struct ParamTvReg{T, S<:AbstractMatrix{T}}
 end
 
 invlink(x) = exp_lin(x) # inverse link function for Poisson regression
-invlink(x) = identity_link(x) # inverse link function for Poisson regression
+#invlink(x) = softplus_link(x) 
 
-#scaling = I(p)
-scaling = inv(sqrt(Σₒ))
-
-scaling = I(p)
-observation(param, state, t) = product_distribution(Poisson.(invlink.(param.Z[t] * inv(scaling) * state)))
-condMean(param, state, t) = invlink.(param.Z[t] * inv(scaling) * state)
-condCov(param, state, t) = diagm(invlink.(param.Z[t] * inv(scaling)* state))
-
+observation(param, state, t) = product_distribution(Poisson.(invlink.(param.Z[t] * state)))
+condMean(param, state, t) = invlink.(param.Z[t] * state)
+condCov(param, state, t) = diagm(invlink.(param.Z[t] * state))
 
 # #### Setting up data as grouped data
 nPerGroup = 5
@@ -166,10 +153,12 @@ modelSettings = (
     nMixComp = 10,    # nComp in mixture approximation of log χ²₁. Only 5 or 10 supported.
 );
 
+scaling = sqrt(Σₒ)
+
 algoSettings = (
     stateSamplingMethod = :pgas, #:ffbs_laplace, # Algorithm to sample the state
     nParticles = 200,           # Number of particles if using PGAS
-    nIter = 3000,               # Number of iterations in the Gibbs sampler
+    nIter = 2000,               # Number of iterations in the Gibbs sampler
     nBurn = 2000,               # Number of burn-in iterations
     nMaxIter = 10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS = 500,             # Number of pre-PGAS iterations to initialize the particles
@@ -188,22 +177,22 @@ PGAS_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
 PlotPostParamEvolution!(plt, PGAS_quantiles, "PGAS($(algoSettings.nParticles))",
     groupSizes; dateVec = nothing, interval_style = :shaded, lw = 2, c = :gray);
 plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time", 
-    bottommargin = 5mm, ylims = [-1.5,1.5], legend = :bottomleft)
+    bottommargin = 5mm, legend = :bottomleft)
 
 # ### Laplace approximation
 algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_laplace)
 
-θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
-    algoSettings);
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings);
 
 println("Laplace failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories") 
 
-
 Laplace_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
-PlotPostParamEvolution!(plt, Laplace_quantiles, "Laplace", groupSizes; 
-    dateVec = nothing, interval_style = :dash, lw = 2, c = colors[3])
+PlotPostParamEvolution!(plt, Laplace_quantiles, "Laplace(scaling)", groupSizes; 
+    dateVec = nothing, interval_style = :dash, lw = 2, c = colors[1])
 plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time", 
+     xguidefontsize = 14, titlefontsize = 20,
     bottommargin = 5mm,legend = :bottomleft)
+
 
 # ### Iterated Posterior linearization filter
 algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_slr)
