@@ -33,7 +33,7 @@ T = 500;
 p = 3;      # Number of parameters, including intercept
 X = ones(T+1); # Design matrix
 σₑ = [1, 10]
-mₑ = [0, 10]
+mₑ = [0, 0]
 for i = 1:(p-1)
     X = hcat(X, simulateAR(T+1, [0.7], σₑ[i], mₑ[i]))
 end
@@ -82,21 +82,21 @@ s₀² = log(s²/(m^2) + 1)
 
 ### Prior for state (softplus)
 
-μₘ = mean(y)
-σ²ₘ = var(y) - μₘ
+#μₘ = mean(y)
+#σ²ₘ = var(y) - μₘ
 
-aa = μₘ^2/σ²ₘ
-be = σ²ₘ/μₘ
+#aa = μₘ^2/σ²ₘ
+#be = σ²ₘ/μₘ
 
-d = Gamma(aa, be)
-l = rand(d, 100000)
-xl = log.(exp.(l) .- 1)
+#d = Gamma(aa, be)
+#l = rand(d, 100000)
+#xl = log.(exp.(l) .- 1)
 
-βₘ = [mean(xl), zeros(p-1)...]
-Σₘ = inv(1/T * X[:,2:end]' * Diagonal(invlink_dgp.(X * βₘ)) * X[:,2:end])
-Σₒ = [var(xl)  zeros(1, size(Σₘ,2));
-     zeros(size(Σₘ,1), 1)  Σₘ]
-Σₒ = 0.5 * (Σₒ + Σₒ')
+#βₘ = [mean(xl), zeros(p-1)...]
+#Σₘ = inv(1/T * X[:,2:end]' * Diagonal(invlink_dgp.(X * βₘ)) * X[:,2:end])
+#Σₒ = [var(xl)  zeros(1, size(Σₘ,2));
+#     zeros(size(Σₘ,1), 1)  Σₘ]
+#Σₒ = 0.5 * (Σₒ + Σₒ')
 
 
 # ### Plot the parameter evolution path of βₜ and the time series
@@ -142,6 +142,20 @@ Y, Z, groupSizes = splitEqualGroups(y, X, nPerGroup)
 # Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
 param = ParamTvReg(LogVol2Covs(zeros(length(groupSizes), p)), Z) 
 
+scaling = sqrt(Σₒ)
+scaling = I(p)
+function FisherInfo(θ, μ, t)
+    Xm = vcat(θ.Z...)
+    T = size(Xm,1)
+    if t > 1
+        S = sqrt(inv((Xm' * Diagonal(exp.(Xm * μ)) * Xm)/T))
+    else 
+        S = scaling
+    end
+    S = Diagonal(diag(S))
+    return S
+end
+
 modelSettings = (
     observation = observation,
     param = param,
@@ -153,8 +167,7 @@ modelSettings = (
     nMixComp = 10,    # nComp in mixture approximation of log χ²₁. Only 5 or 10 supported.
 );
 
-scaling = sqrt(Σₒ)
-
+#scaling = I(p)
 algoSettings = (
     stateSamplingMethod = :pgas, #:ffbs_laplace, # Algorithm to sample the state
     nParticles = 200,           # Number of particles if using PGAS
@@ -165,7 +178,7 @@ algoSettings = (
     offsetMethod = eps(),       # Offset for log-volatility
     h_upper = Inf,               # Upper bound for log-volatility
     polyaoffset = 0.0,           # Offset for Polya-Gamma variables in the update of h_t
-    scaling = scaling,      # Scaling for the state
+    FisherInfo = FisherInfo,      # Scaling for the state
 );
 # ### PGAS 
 θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
@@ -187,8 +200,8 @@ algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_laplace)
 println("Laplace failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories") 
 
 Laplace_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
-PlotPostParamEvolution!(plt, Laplace_quantiles, "Laplace(scaling)", groupSizes; 
-    dateVec = nothing, interval_style = :dash, lw = 2, c = colors[1])
+PlotPostParamEvolution!(plt, Laplace_quantiles, "Laplace(dynamic scaling)", groupSizes; 
+    dateVec = nothing, interval_style = :dash, lw = 3, c = colors[4])
 plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time", 
      xguidefontsize = 14, titlefontsize = 20,
     bottommargin = 5mm,legend = :bottomleft)
