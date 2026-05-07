@@ -7,7 +7,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
     T = length(Y)
     ϕ₀, κ₀, m₀, σ₀, ν₀, ψ₀, μ₀, Σ₀ = priorSettings
     stateSamplingMethod, nParticles, nIter, nBurn, nMaxIter, nPrePGAS, 
-        offsetMethod, h_upper, polyaoffset, scaling = algoSettings 
+        offsetMethod, h_upper, polyaoffset, FisherInfo = algoSettings 
     observation, param, condMean, condCov, α, β, updateσₙ, nMixComp = modelSettings
     p = length(μ₀) # number of states
 
@@ -25,6 +25,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
     θ = zeros(T+1, p) # Regression coefficients evolution
     Dᵩ = BandedMatrix(-1 => repeat([-ϕ[1]], T-1), 0 => Ones(T)) # Init D matrix for h_t
 
+    Svec = zeros(p,p,T) # Storage for scaling matrices in Laplace FFBS
     ## Storage
     θpost = zeros(T+1, p, nIter) # Store regression coefficients
     Hpost = zeros(T, p, nIter) # Store log-volatility evolution
@@ -79,17 +80,17 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
         ## Draw state 
         LogVol2Covs!(param.Σᵥ, H) 
 
-        if scaling != I(size(scaling, 1))
-            for j in 1:size(H,1)
-                Σ_scaled = scaling * Matrix(param.Σᵥ[j]) * scaling'
-                Σ_scaled = 0.5 * (Σ_scaled + Σ_scaled')
-                param.Σᵥ[j] = PDMat(Σ_scaled)
-            end
-        end
+       # if scaling != I(size(scaling, 1))
+        #    for j in 1:size(H,1)
+        #        Σ_scaled = scaling * Matrix(param.Σᵥ[j]) * scaling'
+         #       Σ_scaled = 0.5 * (Σ_scaled + Σ_scaled')
+         #       param.Σᵥ[j] = PDMat(Σ_scaled)
+         #   end
+        #end
 
         
         if stateSamplingMethod == :ffbs_laplace
-            FFBS_laplace!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param; 
+            FFBS_laplace!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param,FisherInfo, Svec; 
                 max_iter = nMaxIter, nFailure = nFailure)
         elseif stateSamplingMethod == :ffbs_slr
             FFBS_SLR!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,
@@ -105,8 +106,13 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
             error("Only :ffbs_laplace or :pgas are implemented yet.")
         end
 
+        #println(size(θ))
         ## Update the log-volatility evolution
-        ν = diff(θ, dims = 1) * inv(scaling)
+
+        ν = diff(θ, dims = 1) #* inv(scaling)
+        for t in 1:T
+           ν[t, :] .=  inv(Svec[:,:,t]) * ν[t, :]
+        end
         
         setOffset!(offset, ν, offsetMethod)
 
