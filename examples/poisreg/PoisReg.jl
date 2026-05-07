@@ -142,6 +142,7 @@ Y, Z, groupSizes = splitEqualGroups(y, X, nPerGroup)
 # Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
 param = ParamTvReg(LogVol2Covs(zeros(length(groupSizes), p)), Z) 
 
+### scaling 
 scaling = sqrt(Σₒ)
 scaling = I(p)
 function FisherInfo(θ, μ, t)
@@ -180,6 +181,7 @@ algoSettings = (
     polyaoffset = 0.0,           # Offset for Polya-Gamma variables in the update of h_t
     FisherInfo = FisherInfo,      # Scaling for the state
 );
+
 # ### PGAS 
 θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
     algoSettings);
@@ -192,7 +194,7 @@ PlotPostParamEvolution!(plt, PGAS_quantiles, "PGAS($(algoSettings.nParticles))",
 plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time", 
     bottommargin = 5mm, legend = :bottomleft)
 
-# ### Laplace approximation
+# ### Laplace approximation 
 algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_laplace)
 
 θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings);
