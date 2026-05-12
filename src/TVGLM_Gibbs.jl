@@ -111,7 +111,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
 
         ν = diff(θ, dims = 1) #* inv(scaling)
         for t in 1:T
-            if det(Svec[:,:,t]) == 0
+            if i == 1 && det(Svec[:,:,t]) == 0
                 Svec[:,:,t] = Svec[:,:,t-1]
             end
            ν[t, :] .=  inv(Svec[:,:,t]) * ν[t, :]
