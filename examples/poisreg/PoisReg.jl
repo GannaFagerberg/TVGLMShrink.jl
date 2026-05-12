@@ -71,12 +71,11 @@ plot(y)
 s² = log(σ²ₘ/(μₘ^2) + 1)
 m = log(μₘ) - s²/2
 
-s₀² = log(s²/(m^2) + 1)
-#m₀ = log(m) - s₀²/2
 
-βₘ = [log(m) - s₀²/2, zeros(p-1)...]
-Σₘ = inv(1/T * X[:,2:end]' * Diagonal(exp.(X * βₘ)) * X[:,2:end])
-Σₒ = [s₀²  zeros(1, size(Σₘ,2));
+βₘ = [m, zeros(p-1)...]
+Σₘ = inv(1/T * X[:,2:end]' * (exp.(X * βₘ) .* X[:,2:end]))
+
+Σₒ = [s²  zeros(1, size(Σₘ,2));
      zeros(size(Σₘ,1), 1)  Σₘ]
 Σₒ = 0.5 * (Σₒ + Σₒ')
 
