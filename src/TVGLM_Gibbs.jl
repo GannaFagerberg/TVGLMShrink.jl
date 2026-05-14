@@ -79,22 +79,13 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
         
         ## Draw state 
         LogVol2Covs!(param.Σᵥ, H) 
-
-       # if scaling != I(size(scaling, 1))
-        #    for j in 1:size(H,1)
-        #        Σ_scaled = scaling * Matrix(param.Σᵥ[j]) * scaling'
-         #       Σ_scaled = 0.5 * (Σ_scaled + Σ_scaled')
-         #       param.Σᵥ[j] = PDMat(Σ_scaled)
-         #   end
-        #end
-
         
         if stateSamplingMethod == :ffbs_laplace
-            FFBS_laplace!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param,FisherInfo, Svec; 
+            FFBS_laplace!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param, FisherInfo, Svec; 
                 max_iter = nMaxIter, nFailure = nFailure)
         elseif stateSamplingMethod == :ffbs_slr
             FFBS_SLR!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,
-                    nMaxIter; α = 1, β = 0, κ = 0, sample_t0 = true, nFailure = nFailure)
+                    nMaxIter, FisherInfo, Svec;  α = 1, β = 0, κ = 0, sample_t0 = true, nFailure = nFailure)
         elseif stateSamplingMethod == :pgas
             θ = PGASsimulate!(θparticles, Y, p, nParticles, param, 
                 prior, transition, observation, initialization, systematic, θ, 
@@ -106,15 +97,14 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
             error("Only :ffbs_laplace or :pgas are implemented yet.")
         end
 
-        #println(size(θ))
         ## Update the log-volatility evolution
 
-        ν = diff(θ, dims = 1) #* inv(scaling)
+        ν = diff(θ, dims = 1) 
         for t in 1:T
             if i == 1 && det(Svec[:,:,t]) == 0
                 Svec[:,:,t] = Svec[:,:,t-1]
             end
-           ν[t, :] .=  inv(Svec[:,:,t]) * ν[t, :]
+           ν[t, :] .=  Svec[:,:,t] \ ν[t, :]
         end
         
         setOffset!(offset, ν, offsetMethod)
