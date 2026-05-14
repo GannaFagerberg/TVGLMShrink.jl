@@ -7,7 +7,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
     T = length(Y)
     ϕ₀, κ₀, m₀, σ₀, ν₀, ψ₀, μ₀, Σ₀ = priorSettings
     stateSamplingMethod, nParticles, nIter, nBurn, nMaxIter, nPrePGAS, 
-        offsetMethod, h_upper = algoSettings 
+        offsetMethod, h_upper, polyaoffset, FisherInfo = algoSettings 
     observation, param, condMean, condCov, α, β, updateσₙ, nMixComp = modelSettings
     p = length(μ₀) # number of states
 
@@ -25,6 +25,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
     θ = zeros(T+1, p) # Regression coefficients evolution
     Dᵩ = BandedMatrix(-1 => repeat([-ϕ[1]], T-1), 0 => Ones(T)) # Init D matrix for h_t
 
+    Svec = zeros(p,p,T) # Storage for scaling matrices in Laplace FFBS
     ## Storage
     θpost = zeros(T+1, p, nIter) # Store regression coefficients
     Hpost = zeros(T, p, nIter) # Store log-volatility evolution
@@ -53,7 +54,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
             algoSettingsInit = (stateSamplingMethod = :ffbs_laplace, 
                 nParticles = nParticles, nIter = nPrePGAS, 
                 nBurn = round(Int, 0.1*nPrePGAS), nMaxIter = nMaxIter, 
-                nPrePGAS = 0, offsetMethod = offsetMethod, h_upper = h_upper)
+                nPrePGAS = 0, offsetMethod = offsetMethod, h_upper = h_upper, polyaoffset = polyaoffset, scaling = scaling)
             θpost0, Hpost0, ϕpost0, σ²ₙpost0, μpost0 = GibbsTVGLM(Y, priorSettings, 
                 modelSettings, algoSettingsInit);
             μ_prop = median(θpost0[1,:,:], dims = 2)[:]
@@ -78,13 +79,13 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
         
         ## Draw state 
         LogVol2Covs!(param.Σᵥ, H) 
-
+        
         if stateSamplingMethod == :ffbs_laplace
-            FFBS_laplace!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param; 
+            FFBS_laplace!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param, FisherInfo, Svec; 
                 max_iter = nMaxIter, nFailure = nFailure)
         elseif stateSamplingMethod == :ffbs_slr
             FFBS_SLR!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,
-                    nMaxIter; α = 1, β = 0, κ = 0, sample_t0 = true, nFailure = nFailure)
+                    nMaxIter, FisherInfo, Svec;  α = 1, β = 0, κ = 0, sample_t0 = true, nFailure = nFailure)
         elseif stateSamplingMethod == :pgas
             θ = PGASsimulate!(θparticles, Y, p, nParticles, param, 
                 prior, transition, observation, initialization, systematic, θ, 
@@ -97,10 +98,19 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings)
         end
 
         ## Update the log-volatility evolution
-        ν = diff(θ, dims = 1)
+
+        ν = diff(θ, dims = 1) 
+        for t in 1:T
+            if i == 1 && det(Svec[:,:,t]) == 0
+                Svec[:,:,t] = Svec[:,:,t-1]
+            end
+           ν[t, :] .=  Svec[:,:,t] \ ν[t, :]
+        end
+        
         setOffset!(offset, ν, offsetMethod)
+
         update_dsp!(ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings, mixture, Dᵩ,
-            offset, α, β, updateσₙ, h_upper)
+            offset, α, β, updateσₙ, h_upper, polyaoffset)
 
         if i > nBurn
             θpost[:, :, i - nBurn] = θ
