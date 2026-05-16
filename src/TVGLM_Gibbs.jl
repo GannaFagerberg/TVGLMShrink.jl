@@ -74,6 +74,9 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings; show_progress
 
     nFailure = Ref(0)
 
+    if haskey(ENV, "SLURM_JOB_ID")
+        show_progress = false
+    end # No progress bar on cluster
     progressMessage = "Sampling progress: "
     @showprogress desc = progressMessage enabled = show_progress for i in 1:(nBurn+nIter)
 
