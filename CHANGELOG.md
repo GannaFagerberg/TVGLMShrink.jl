@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.2] - 2026-05-16
+### Changed
+- progress bar is now not shown when running on a cluster
+
 ## [0.2.1] - 2026-05-16
 ### Changed
 - Interpolation and plotting for groups cleaned up. Linear interp added.
@@ -16,7 +20,7 @@
 - Created the CHANGELOG.md (this file)
 - Added a .JuliaFormatter.toml for formatting the code.
 
-
+[0.2.2]: https://github.com/compbayes/TVGLMShrink.jl/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/compbayes/TVGLMShrink.jl/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/compbayes/TVGLMShrink.jl/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/compbayes/TVGLMShrink.jl/compare/v0.1.1...v0.1.2
