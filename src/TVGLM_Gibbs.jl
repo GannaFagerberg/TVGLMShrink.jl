@@ -2,14 +2,38 @@
 # - non-linear/non-Gaussian (NN) observation model
 # - linear Gaussian (LG) state evolution (conditional on Polya-Gamma latents)
 # - dynamic shrinkage process prior for the state innovations 
-function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings; show_progress=true)
+function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
+    show_progress=true)
 
-    T = length(Y)
+    # Unpack settings
+    y, X, covSel, nPerGroup = dataSettings
     ϕ₀, κ₀, m₀, σ₀, ν₀, ψ₀, μ₀, Σ₀ = priorSettings
-    stateSamplingMethod, nParticles, nIter, nBurn, nMaxIter, nPrePGAS,
-    offsetMethod, h_upper, polyaoffset, scaling, FisherInfo = algoSettings
-    observation, param, condMean, condCov, α, β, updateσₙ, nMixComp = modelSettings
+    stateSamplingMethod, nParticles, nIter, nBurn, nMaxIter, nPrePGAS, offsetMethod,
+    h_upper, polyaoffset, scaling, FisherInfo = algoSettings
+    observation, staticParam, condMean, condCov, α, β, updateσₙ, nMixComp = modelSettings
+
     p = length(μ₀) # number of states
+    Tobs = length(y)
+
+    # Setting up data as grouped data
+    Y, Z, groupSizes = splitEqualGroups(y, X, covSel, nPerGroup)
+    T = length(Y)
+    groupsize_common = ceil(Int, mean(groupSizes)) # Assuming common group size.
+
+    # Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
+    param = staticParam(LogVol2Covs(zeros(length(groupSizes), p)), Z...)
+
+    # Define the scaling matrix
+    ScaleMat =
+        if scaling == :full
+            (θ, μ, t) -> inv(sqrt(Symmetric(FisherInfo(θ, μ, t) / Tobs)))
+        elseif scaling == :diagonal
+            (θ, μ, t) -> Diagonal(diag(inv(sqrt(Symmetric(FisherInfo(θ, μ, t) / Tobs)))))
+        elseif scaling == :none
+            (θ, μ, t) -> zeros(p, p)
+        else
+            error("Invalid scaling option. Choose :full, :diagonal or :none.")
+        end
 
     ## Approximate the log χ²₁ distribution with a mixture of normals
     mixture = SetUpLogChi2Mixture(nMixComp) # Only 5 and 10 component supported
@@ -46,7 +70,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings; show_progress
                 (param, state, t) -> Normal(state, sqrt(param.Σᵥ[t][1]))
             else
                 (param, state, t) -> begin
-                    Smat = FisherInfo(param, state, t)
+                    Smat = ScaleMat(param, state, t)
                     Normal(state, Smat[1, 1] * sqrt(param.Σᵥ[t][1]))
                 end
             end
@@ -55,7 +79,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings; show_progress
                 (param, state, t) -> MvNormal(state, param.Σᵥ[t])
             else
                 (param, state, t) -> begin
-                    Smat = FisherInfo(param, state, t)
+                    Smat = ScaleMat(param, state, t)
                     MvNormal(state, Smat * param.Σᵥ[t] * Smat')
                 end
             end
@@ -106,12 +130,12 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings; show_progress
                 FFBS_laplace!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param; max_iter=nMaxIter, nFailure=nFailure)
             else
                 FFBS_laplace!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param,
-                    FisherInfo, Svec; max_iter=nMaxIter, nFailure=nFailure)
+                    ScaleMat, Svec; max_iter=nMaxIter, nFailure=nFailure)
             end
         elseif stateSamplingMethod == :ffbs_slr
             if scaling === :none
                 FFBS_SLR!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,
-                    nMaxIter, FisherInfo, Svec; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
+                    nMaxIter, ScaleMat, Svec; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
             else
                 FFBS_SLR!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,
                     nMaxIter; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
@@ -121,7 +145,7 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings; show_progress
                 prior, transition, observation, initialization, systematic, θ;
                 nFailure=nFailure)
             for t in 1:T
-                Svec[:, :, t] = FisherInfo(param, θ[t, :], t)
+                Svec[:, :, t] = ScaleMat(param, θ[t, :], t)
             end
         elseif stateSamplingMethod == :montecarlo
             if scaling === :none
@@ -146,9 +170,14 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings; show_progress
         end
 
         setOffset!(offset, ν, offsetMethod)
-        update_dsp!(ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings, mixture, Dᵩ,
-            offset, α, β, updateσₙ, h_upper, polyaoffset)
-        #println("Gibbs iteration $i completed")
+        if groupsize_common == 1
+            update_dsp!(ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings, mixture, Dᵩ,
+                offset, α, β, updateσₙ, h_upper, polyaoffset)
+        else
+            update_dsp!(groupsize_common, ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings,
+                mixture, Dᵩ, offset, α, β, updateσₙ, h_upper, polyaoffset)
+        end
+
         if i > nBurn
             θpost[:, :, i-nBurn] = θ
             Hpost[:, :, i-nBurn] = H
@@ -158,5 +187,5 @@ function GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings; show_progress
         end
     end
 
-    return θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure
+    return θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure
 end

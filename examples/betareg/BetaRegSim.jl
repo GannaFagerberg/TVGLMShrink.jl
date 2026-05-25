@@ -8,6 +8,9 @@ else
 end
 println("slurm_id = $slurm_id")
 
+using Pkg, Revise
+Pkg.activate(@__DIR__) # Activate envir
+
 using Pkg
 Pkg.activate(joinpath(@__DIR__, "../.."))
 cd(joinpath(@__DIR__, "../.."))
@@ -29,9 +32,9 @@ Random.seed!(slurm_id); # set seed for reproducibility, different seed for each 
 # Simulate data from the Beta regression model with fixed parameter paths
 T = 500;
 nCov = 2;       # Total number of covariates, excluding the intercept
-covSel = [[1, 2, 3], [1]] # covariates for mean and precision, first covariate is intercept
 p = length(covSel[1])
 q = length(covSel[2])
+covSel = [[1, 2, 3], [1]] # covariates for mean and precision, first covariate is intercept
 β₀ = [0.0, 0, -0.05]
 γ₀ = [1]        # log precision intercept
 logistic(x) = 1 / (1 + exp(-x))
@@ -49,7 +52,7 @@ y, X, β, γ, μtime, ψtime, αtime, βtime = simulate_beta_reg_data(T, nCov, c
 # plot the parameter evolution path of the regression coefficients
 plt = plot_param_path_betareg(β, γ)
 
-# plot the evolution of the Beta distribution parameters over time
+# plot the evolution of the Beta parameters over time
 plot_betaparam_evolution(μtime, ψtime, αtime, βtime)
 
 # plot the evolution of the Beta density over time and the time series
@@ -105,22 +108,40 @@ algoSettings = (
 
 keep_t0 = false # Whether to keep the state at time t=0 in the output of the Gibbs sampler
 results = []
-## Laplace approximation - full Fisher scaling
-algoSettings = (; algoSettings..., stateSamplingMethod=:ffbs_laplace);
+## Laplace approximation
+algoSettings = (; algoSettings..., stateSamplingMethod=:ffbs_laplace)
+for nPerGroup in [3, 5, 10]
+    for scaling in [:full, :diagonal, :none]
+        println("nPerGroup = $nPerGroup, scaling = $scaling")
 
-scaling = :none
-nPerGroup = 5
-algoSettings = (; algoSettings..., scaling=scaling);
-dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
+        algoSettings = (; algoSettings..., scaling=scaling)
+        dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup)
 
-θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
-    priorSettings, modelSettings, algoSettings);
+        θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
+            priorSettings, modelSettings, algoSettings)
 
-println("Laplace failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories")
+        # Parameter quantiles on the parameter time scale - this always includes t=0
+        quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3)
 
-# Parameter quantiles on the parameter time scale - this always includes t=0
-quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
+        # Interp parameter quantiles to the observation time scale - potentially drop t=0
+        quant_obstime, dateVec = interpParam2Obs(quant_paramtime, groupSizes;
+            sample_t0=true, output_t0=keep_t0, interpMethod=:constant)
 
-PlotPostParamEvolution!(plt, quant_paramtime,
-    "Laplace($(nPerGroup))$(scalingLabel(scaling))",
-    groupSizes; dateVec=nothing, interpMethod=:constant, plot_t0=keep_t0, interval_style=:dash, lw=3, c=colors[3])
+        scalingMethod = scaling == :full ? "F" : (scaling == :diagonal ? "D" : "N")
+
+        push!(results, (
+            name="Laplace$(nPerGroup)$(scalingMethod)",
+            quant_paramtime=quant_paramtime,
+            quant_obstime=quant_obstime,
+            priorSettings=priorSettings,
+            modelSettings=modelSettings,
+            algoSettings=algoSettings,
+            groupSizes=groupSizes,
+            dateVec=dateVec,
+            nFailure=nFailure[])
+        )
+    end
+end
+
+## IPLF approximation
+TODO: # Implement IPLF and add to the `results` array, similar to Laplace approx above.

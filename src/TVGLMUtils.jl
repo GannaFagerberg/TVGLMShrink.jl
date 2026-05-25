@@ -90,3 +90,6 @@ function interpParam2Obs(θ, groupSizes=nothing, dateVec=nothing; sample_t0=fals
     return θobs, dateVec
 end
 
+function scalingLabel(scaling)
+    return scaling == :full ? "F" : (scaling == :diagonal ? "D" : "N")
+end

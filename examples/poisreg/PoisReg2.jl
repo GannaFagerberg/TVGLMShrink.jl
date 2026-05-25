@@ -18,6 +18,7 @@ using JLD2, PDMats
 using SMCsamplers, DynamicGlobalLocalShrinkage
 using Utils: quantile_multidim
 using Utils: mvcolors as colors
+includet("PoisRegModel.jl")  # Load simulator, Fisher info and plotting 
 
 ## Settings
 
@@ -55,31 +56,6 @@ if !isdir(resFolder)
     mkdir(resFolder)
 end
 
-# Define function to simulate Poisson regression data with time-varying parameters
-function simulate_poisson_reg_data(T, p, invlink, ρ, σₑ, mₑ, β₀)
-    X = ones(T + 1)
-    for i = 1:(p-1)
-        X = hcat(X, simulateAR(T + 1, ρ[i], σₑ[i], mₑ[i]))
-    end
-    y = zeros(T + 1)
-    β = zeros(T + 1, p)
-    β[1, :] = β₀
-
-    for t in 2:(T+1)
-        β[t, 1] = sin(2π * t / T)
-        if t < T / 3
-            β[t, 2] = 0
-        elseif t < ((2 / 3) * T)
-            β[t, 2] = -1
-        else
-            β[t, 2] = 1
-        end
-        β[t, 3] = 0.05
-        y[t] = rand(Poisson(invlink_dgp((X[t, :] ⋅ β[t, :]))))
-    end
-    return y[2:end], X[2:end, :], β
-end
-
 Random.seed!(slurm_id); # set seed for reproducibility, different seed for each slurm_id
 
 results = []       # Store results for all methods/models/options in this array
@@ -88,20 +64,6 @@ results = []       # Store results for all methods/models/options in this array
 p = 3;      # Number of parameters, including intercept
 y, X, β = simulate_poisson_reg_data(T, p, invlink_dgp, ρ, σₑ, mₑ, β₀)
 
-### Prior for state (exp)
-μₘ = mean(y)
-σ²ₘ = var(y) - μₘ
-
-s² = log(σ²ₘ / (μₘ^2) + 1)
-m = log(μₘ) - s² / 2
-
-
-βₘ = [m; zeros(p - 1)]
-Σₘ = inv(1 / T * X[:, 2:end]' * (exp.(X * βₘ) .* X[:, 2:end]))
-
-Σ₀ = [s² zeros(1, size(Σₘ, 2));
-    zeros(size(Σₘ, 1), 1) Σₘ]
-Σ₀ = 0.5 * (Σ₀ + Σ₀')
 
 # ### Plot the parameter evolution path of βₜ and the time series
 keep_t0 = false # plot β₀ or not
@@ -122,15 +84,6 @@ priorSettings = (
     μ₀=zeros(p), Σ₀=5 * I(p),# Prior for βₜ at time t=0
 );
 
-# ### Set up the Poisson regression model
-mutable struct ParamTvReg{T,S<:AbstractMatrix{T}}
-    Σᵥ::Vector{PDMat{T,S}}
-    Z::Vector{Matrix{T}}
-end
-
-observation(param, state, t) = product_distribution(Poisson.(invlink.(param.Z[t] * state)))
-condMean(param, state, t) = invlink.(param.Z[t] * state)
-condCov(param, state, t) = diagm(invlink.(param.Z[t] * state))
 
 ## Setting up data as grouped data
 Y, Z, groupSizes = splitEqualGroups(y, X, nPerGroup)
