@@ -18,6 +18,11 @@ function PlotPostParamEvolution!(plts, postquantiles, label, groupSizes=nothing;
 
     for j = 1:p
 
+        if j == 1
+            legendPos = :topright
+        else
+            legendPos = :none
+        end
         if interval_style == :shaded
             plot!(plts[j], dateVec, postquantiles_obs[:, j, 2],
                 fillrange=postquantiles_obs[:, 1],
@@ -25,14 +30,15 @@ function PlotPostParamEvolution!(plts, postquantiles, label, groupSizes=nothing;
             plot!(plts[j], dateVec, postquantiles_obs[:, j, 2],
                 fillrange=postquantiles_obs[:, 3],
                 label=nothing, alpha=alpha; kwargs...)
-            plot!(plts[j], dateVec, postquantiles_obs[:, j, 2], label=label; kwargs...)
+            plot!(plts[j], dateVec, postquantiles_obs[:, j, 2], label=label,
+                legend=legendPos; kwargs...)
         else
             plot!(plts[j], dateVec, postquantiles_obs[:, j, 1],
                 label=nothing, linestyle=interval_style; kwargs...)
             plot!(plts[j], dateVec, postquantiles_obs[:, j, 3],
                 label=nothing, linestyle=interval_style; kwargs...)
             plot!(plts[j], dateVec, postquantiles_obs[:, j, 2],
-                label=label; kwargs...)
+                label=label, legend=legendPos; kwargs...)
         end
     end
     return plts
