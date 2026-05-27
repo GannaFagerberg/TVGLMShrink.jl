@@ -3,7 +3,7 @@
 using LinearAlgebra
 using SpecialFunctions   # for trigamma in Fisher info
 
-BetaMean(μ, ψ) = Beta(1.0e-5 + μ * ψ, 1.0e-5 + (1 - μ) * ψ)
+BetaMean(μ, ψ) = Beta(1.0e-15 + μ * ψ, 1.0e-15 + (1 - μ) * ψ)
 
 ## Set up the Beta regression model
 
@@ -135,25 +135,15 @@ priorμ = [0.5, 0.5] # mean and precision in Beta dist for μ at t=0
 function prior_t0(priorparam_μ, inflateFactor_ϕ, FisherInfo, κ₀, p, q)
 
     # μ
-    logit(x) = log(x ./ (1 .- x))
-    E_μ = priorparam_μ[1]
-    ϕ_μ = priorparam_μ[2]
-    μ_sim = rand(BetaMean(E_μ, ϕ_μ), 10000) # Add small const -  avoid logit(0) or logit(1)
-    μ_sim = clamp.(μ_sim, 1e-5, 1 - 1e-5)
-    β_m0 = [mean(logit.(μ_sim)); zeros(p - 1)]
+    f_μ(x) = priorparam_μ[1] - invlinkmean(x)
+    β_m0 = [find_zero(f_μ, 0.0); zeros(p - 1)]
 
-    # ϕ
-    E_ϕ = E_μ * (1 - E_μ) / var(y) - 1
-    var_ϕ = inflateFactor_ϕ * E_ϕ
-    s² = log(var_ϕ / (E_ϕ^2) + 1)
-    m = log(E_ϕ) - s² / 2
-    β_ϕ0 = [m, zeros(q - 1)...]
+    f_ϕ(x) = priorparam_μ[1] - invlinkprecision(x)
+    β_ϕ0 = [find_zero(f_ϕ, 0.0); zeros(q - 1)]
 
     μ₀ = [β_m0; β_ϕ0]
 
     Finfo = FisherInfo([], μ₀, 0)
-    nugget = 1e-8 * max(1.0, tr(Finfo) / size(Finfo, 1))
-    Finfo = FisherInfo([], μ₀, 0) + nugget * I(length(μ₀)) # Fisher information for all data
     Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo)
 
     return μ₀, Σ₀
@@ -193,7 +183,11 @@ function simulate_beta_reg_data(T, nCov, covSel, invlinkmean, invlinkprec,
             end
         end
         β[t, 3] = -0.05
-        γ[t, 1] = 1.0
+        if t < T / 2
+            γ[t, 1] = 1
+        else
+            γ[t, 1] = 3.0
+        end
         μtime[t] = invlinkmean(Xmean[t, :] ⋅ β[t, :])
         ψtime[t] = invlinkprec(Xprec[t, :] ⋅ γ[t, :])
         y[t] = rand(BetaMean(μtime[t], ψtime[t]))

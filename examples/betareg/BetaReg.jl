@@ -25,6 +25,7 @@ gr(legend=:topleft, grid=false, color=colors[2], lw=2, legendfontsize=12,
 
 Random.seed!(slurm_id); # set seed for reproducibility, different seed for each slurm_id
 
+BetaMean(μ, ψ) = Beta(1.0e-15 + μ * ψ, 1.0e-15 + (1 - μ) * ψ)
 
 # Simulate data from the Beta regression model with fixed parameter paths
 T = 500;
@@ -55,7 +56,6 @@ plot_betaparam_evolution(μtime, ψtime, αtime, βtime)
 # plot the evolution of the Beta density over time and the time series
 plot_betadensity_evolution(μtime, ψtime, y)
 
-
 ## The prior for the state at time t=0 using priors on intercepts and Fisher info
 priorparam_μ = [0.5, 0.5] # Prior for μ ∼ BetaMean(0.5, 0.5)
 inflateFactor_ϕ = 1.0 # Inflation factor for prior variance of ϕ
@@ -75,7 +75,7 @@ priorSettings = (
     ϕ₀=0.5, κ₀=0.3,             # Prior for ϕ ~ N(ϕ₀, κ₀²)
     m₀=-15.0, σ₀=3.0,           # Prior for μ ~ N(m₀, σ₀²)
     ν₀=3.0, ψ₀=1,               # Prior for σ²ₙ ~ scaled inverse χ²(ν₀, ψ₀)
-    μ₀=zeros(p + q), Σ₀=Diagonal(5 * ones(p + q)), # Prior for βₜ at time t=0
+    μ₀=μ₀, Σ₀=Σ₀, # Prior for βₜ at time t=0
 );
 
 modelSettings = (
@@ -108,7 +108,7 @@ results = []
 ## Laplace approximation - full Fisher scaling
 algoSettings = (; algoSettings..., stateSamplingMethod=:ffbs_laplace);
 
-scaling = :none
+scaling = :diagonal
 nPerGroup = 5
 algoSettings = (; algoSettings..., scaling=scaling);
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
@@ -123,4 +123,9 @@ quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 
 PlotPostParamEvolution!(plt, quant_paramtime,
     "Laplace($(nPerGroup))$(scalingLabel(scaling))",
-    groupSizes; dateVec=nothing, interpMethod=:constant, plot_t0=keep_t0, interval_style=:dash, lw=3, c=colors[3])
+    groupSizes; dateVec=nothing, interpMethod=:constant, plot_t0=keep_t0, interval_style=:dash, lw=3, c=colors[4])
+
+quant_originalT = interpParam2Obs(quant_paramtime, groupSizes,sample_t0=true)
+size(quant_originalT[1])
+μmedian = invlinkmean(X ⋅ quant_paramtime[:, covSel[1], 2]) # Extract median of μ path
+plot_betadensity_evolution(μtime, ψtime, y)

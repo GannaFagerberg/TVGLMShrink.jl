@@ -1,4 +1,4 @@
-# # Poisson regression with Dynamic Shrinkage Process parameter evolution
+# Poisson Regression with Parameters Sampled from a DSP Prior
 
 # In this example we explore the joint posterior in the Poisson regression model with parameters following independent dynamic shrinkage process priors.
 #
@@ -11,235 +11,121 @@
 # ```
 #
 
-# First we load the required packages and set some plotting parameters:
+# If on SLURM cluster, get SLURM_ARRAY_TASK_ID, otherwise use ARGS for local testing
+if haskey(ENV, "SLURM_ARRAY_TASK_ID")
+    slurm_id = parse(Int, ENV["SLURM_ARRAY_TASK_ID"])
+else
+    slurm_id = isempty(ARGS) ? 0 : parse(Int, ARGS[1])
+end
+println("slurm_id = $slurm_id")
+
+using Pkg
+Pkg.activate(joinpath(@__DIR__, "../.."))
+cd(joinpath(@__DIR__, "../.."))
 using TVGLMShrink
 using Distributions, LaTeXStrings, Plots, LinearAlgebra, Measures, Random
-using PDMats
+using PDMats, LogExpFunctions
 using SMCsamplers, DynamicGlobalLocalShrinkage
 using Utils: quantile_multidim
 using Utils: mvcolors as colors
+using Roots
+includet("PoisModel.jl")  # Load simulator, Fisher info and plotting for PoisReg
 
-gr(legend = :topleft, grid = false, color = colors[2], lw = 2, legendfontsize=12,
+gr(legend=:topleft, grid=false, color=colors[2], lw=2, legendfontsize=12,
     xtickfontsize=12, ytickfontsize=12, xguidefontsize=12, yguidefontsize=12,
-    titlefontsize = 18, markerstrokecolor = :auto)
+    titlefontsize=18, markerstrokecolor=:auto)
 
-figFolder = joinpath(@__DIR__)
-
-Random.seed!(1234);
+Random.seed!(slurm_id); # set seed for reproducibility, different seed for each slurm_id
 
 
-# ### Simulate data from the Poisson regression model with fixed parameter paths
+# Simulate data from the Poisson regression model with fixed parameter paths
 T = 500;
-p = 3;      # Number of parameters, including intercept
-X = ones(T+1); # Design matrix
-σₑ = [1, 10]
-mₑ = [0, 0]
-for i = 1:(p-1)
-    X = hcat(X, simulateAR(T+1, [0.7], σₑ[i], mₑ[i]))
-end
-y = zeros(T+1)
-β = zeros(T+1,p) # Store the regression parameters
-β[1,:] = [0.0, 0.0, 0.05]
+nCov = 1;       # Total number of covariates, excluding the intercept
+covSel = [[1, 2, 3]] # covariates for mean and precision, first covariate is intercept
+p = length(covSel[1])
+β₀ = [0.0, 0, -0.05]
 invlink_dgp(x) = exp_lin(x) # Inverse link function for Poisson regression
+σₑ = [1 5; 5 100];        # Noise std for the AR(1) processes that generate the covariates
+mₑ = [0.0, 0.0];     # Mean for the AR(1) processes that generate the covariates
+φ = 0.7
+y, X, β, λtime = simulate_poisson_reg_data(T, p, covSel[1],invlink_dgp, φ, σₑ, mₑ);
 
-#softplus_link(x) = log(1+exp(x))
-#invlink_dgp(x) = softplus_link(x)
+## Plot the true parameter paths and the time series
 
-for t in 2:(T+1)
-    β[t,1] =  sin(2π*t/T)#2 * sin(2π*t/T) for softplus
-    if t < T/3
-        β[t,2] = 0
-    else 
-        if t < ((2/3)*T)
-            β[t,2] = -1 # -2
-        else
-            β[t,2] = 1 # 1
-        end
-    end
-    β[t,3] = 0.05 # -0.1
-    y[t] = rand(Poisson(invlink_dgp((X[t,:]⋅β[t,:]))))
-end
-y = y[2:end];
-X = X[2:end,:];
-plot(y)
+# plot the parameter evolution path of the regression coefficients
+plt = plot_param_path_poisreg(β)
 
+# plot the evolution of the Poisson distribution parameters over time
+plot_poisparam_evolution(λtime)
 
-### Prior for state (exp)
-μₘ = mean(y)
-σ²ₘ = var(y) - μₘ
+# plot the evolution of the Poisson density over time and the time series
+plot_poisdensity_evolution(λtime, y)
 
-s² = log(σ²ₘ/(μₘ^2) + 1)
-m = log(μₘ) - s²/2
+## The prior for the state at time t=0 using priors on intercepts and Fisher info
+priorparam_λ = mean(y[1:20]) # Prior for λ ∼ lognormal(m, σ²)
+κ₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
+μ₀, Σ₀ = prior_t0(priorparam_λ, FisherInfo, κ₀, p)
 
 
-βₘ = [m, zeros(p-1)...]
-Σₘ = inv(1/T * X[:,2:end]' * (exp.(X * βₘ) .* X[:,2:end]))
-
-Σₒ = [s²  zeros(1, size(Σₘ,2));
-     zeros(size(Σₘ,1), 1)  Σₘ]
-Σₒ = 0.5 * (Σₒ + Σₒ')
-
-### Prior for state (softplus)
-
-#μₘ = mean(y)
-#σ²ₘ = var(y) - μₘ
-
-#aa = μₘ^2/σ²ₘ
-#be = σ²ₘ/μₘ
-
-#d = Gamma(aa, be)
-#l = rand(d, 100000)
-#xl = log.(exp.(l) .- 1)
-
-#βₘ = [mean(xl), zeros(p-1)...]
-#Σₘ = inv(1/T * X[:,2:end]' * Diagonal(invlink_dgp.(X * βₘ)) * X[:,2:end])
-#Σₒ = [var(xl)  zeros(1, size(Σₘ,2));
-#     zeros(size(Σₘ,1), 1)  Σₘ]
-#Σₒ = 0.5 * (Σₒ + Σₒ')
+# Check that the prior 95% interval to see that they make sense
+priorStd = sqrt.(diag(Σ₀))
+println("Prior interval for the state at time t=0:")
+[μ₀ .- 1.96 * priorStd μ₀ .+ 1.96 * priorStd]
 
 
-# ### Plot the parameter evolution path of βₜ and the time series
-plt = []
-for j = 1:p
-    push!(plt, plot(β[:,j], label = "true", xlabel = "time, "*L"t", 
-        ylabel = "", title = L"\beta_{%$(j-1)}", color = :black, lw = 2))
-end
-plot(plt..., layout = (p,1), size = (1200, 1000), xguidefontsize = 12, 
-    yguidefontsize = 14, titlefontsize=20, 
-    legend = :bottomleft, margin = 5mm) 
+## Set up the prior, model and algorithm settings
 
-# Plot the time series
-plot(y, xlabel = "time, "*L"t", ylabel = L"y_t", lw = 1,  
-    color = colors[1], legend = nothing)
-scatter!(y, markersize = 2, color = colors[1])
-
-# ### Set up the prior, model and algorithm settings
+dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=1)
 priorSettings = (
-    ϕ₀ = 0.5, κ₀ = 0.3,         # Prior for ϕ ~ N(ϕ₀, κ₀²)
-    m₀ = -15.0, σ₀ = 3.0,       # Prior for μ ~ N(m₀, σ₀²)
-    ν₀ = 3.0, ψ₀ = 1.0,         # Prior for σ²ₙ ~ scaled inverse χ²(ν₀, ψ₀)
-    μ₀ = zeros(p), Σ₀ = 5*I(p),# Prior for βₜ at time t=0
-); 
-
-# ### Set up the Poisson regression model
-mutable struct ParamTvReg{T, S<:AbstractMatrix{T}}
-    Σᵥ::Vector{PDMat{T,S}}
-    Z::Vector{Matrix{T}}
-end
-
-invlink(x) = exp_lin(x) # inverse link function for Poisson regression
-#invlink(x) = softplus_link(x) 
-
-observation(param, state, t) = product_distribution(Poisson.(invlink.(param.Z[t] * state)))
-condMean(param, state, t) = invlink.(param.Z[t] * state)
-condCov(param, state, t) = diagm(invlink.(param.Z[t] * state))
-
-# #### Setting up data as grouped data
-nPerGroup = 5
-Y, Z, groupSizes = splitEqualGroups(y, X, nPerGroup)
-
-# Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
-param = ParamTvReg(LogVol2Covs(zeros(length(groupSizes), p)), Z) 
-
-### scaling 
-scaling = sqrt(Σₒ)
-scaling = I(p)
-function FisherInfo(θ, μ, t)
-    Xm = vcat(θ.Z...)
-    T = size(Xm,1)
-    if t > 1
-        S = sqrt(inv((Xm' * Diagonal(exp.(Xm * μ)) * Xm)/T))
-    else 
-        S = scaling
-    end
-    S = Diagonal(diag(S))
-    return S
-end
+    ϕ₀=0.5, κ₀=0.3,             # Prior for ϕ ~ N(ϕ₀, κ₀²)
+    m₀=-15.0, σ₀=3.0,           # Prior for μ ~ N(m₀, σ₀²)
+    ν₀=3.0, ψ₀=1,               # Prior for σ²ₙ ~ scaled inverse χ²(ν₀, ψ₀)
+    μ₀=μ₀, Σ₀=Σ₀, # Prior for βₜ at time t=0
+);
 
 modelSettings = (
-    observation = observation,
-    param = param,
-    condMean  = condMean,
-    condCov   = condCov,
-    α = 1/2,          # First shape param in Z distribution
-    β = 1/2,          # Second shape param in Z distribution
-    updateσₙ = false, # Update σ²ₙ in the Gibbs sampler, or set σₙ = 1
-    nMixComp = 10,    # nComp in mixture approximation of log χ²₁. Only 5 or 10 supported.
+    observation=observation,
+    staticParam=ParamPoisReg,
+    condMean=condMean,
+    condCov=condCov,
+    α=1 / 2,
+    β=1 / 2,
+    updateσₙ=false, # Update σ²ₙ in the Gibbs sampler, or set σₙ = 1
+    nMixComp=10,    # nComp in mixture approximation of log χ²₁. Only 5 or 10 supported.
 );
 
-#scaling = I(p)
 algoSettings = (
-    stateSamplingMethod = :pgas, #:ffbs_laplace, # Algorithm to sample the state
-    nParticles = 200,           # Number of particles if using PGAS
-    nIter = 2000,               # Number of iterations in the Gibbs sampler
-    nBurn = 2000,               # Number of burn-in iterations
-    nMaxIter = 10,              # Maximum number of iterations for Laplace/IPLF
-    nPrePGAS = 500,             # Number of pre-PGAS iterations to initialize the particles
-    offsetMethod = eps(),       # Offset for log-volatility
-    h_upper = Inf,               # Upper bound for log-volatility
-    polyaoffset = 0.0,           # Offset for Polya-Gamma variables in the update of h_t
-    FisherInfo = FisherInfo,      # Scaling for the state
+    stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
+    nParticles=100,           # Number of particles if using PGAS
+    nIter=2000,               # Number of iterations in the Gibbs sampler
+    nBurn=2000,               # Number of burn-in iterations
+    nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
+    nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
+    offsetMethod=eps(),       # Offset for log-volatility
+    h_upper=Inf,              # Upper bound for log-volatility
+    polyaoffset=0.0,          # Offset for Polya-Gamma variables in the update of h_t
+    scaling=:full,            # Scaling of state innov, can be :full, :diagonal or :none
+    FisherInfo=FisherInfo,    # Scaling for the state
 );
 
-# ### PGAS 
-θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
-    algoSettings);
+keep_t0 = false # Whether to keep the state at time t=0 in the output of the Gibbs sampler
+results = []
+## Laplace approximation - full Fisher scaling
+algoSettings = (; algoSettings..., stateSamplingMethod=:ffbs_laplace);
 
-println("PGAS failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories") 
+scaling = :diagonal
+nPerGroup = 1
+algoSettings = (; algoSettings..., scaling=scaling);
+dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
 
-PGAS_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
-PlotPostParamEvolution!(plt, PGAS_quantiles, "PGAS($(algoSettings.nParticles))",
-    groupSizes; dateVec = nothing, interval_style = :shaded, lw = 2, c = :gray);
-plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time", 
-    bottommargin = 5mm, legend = :bottomleft)
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
+    priorSettings, modelSettings, algoSettings);
 
-# ### Laplace approximation 
-algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_laplace)
+println("Laplace failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories")
 
-θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, algoSettings);
+# Parameter quantiles on the parameter time scale - this always includes t=0
+quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 
-println("Laplace failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories") 
-
-Laplace_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
-PlotPostParamEvolution!(plt, Laplace_quantiles, "Laplace(dynamic scaling)", groupSizes; 
-    dateVec = nothing, interval_style = :dash, lw = 3, c = colors[4])
-plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time", 
-     xguidefontsize = 14, titlefontsize = 20,
-    bottommargin = 5mm,legend = :bottomleft)
-
-
-# ### Iterated Posterior linearization filter
-algoSettings = (; algoSettings..., stateSamplingMethod = :ffbs_slr)
-
-θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
-    algoSettings);
-
-println("IPLF failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories") 
-
-IPLF_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
-PlotPostParamEvolution!(plt, IPLF_quantiles, "IPLF($(algoSettings.nMaxIter))",
-    groupSizes; 
-    dateVec = nothing, interval_style = :solid, lw = 2, c = colors[1])
-plot(plt..., layout = (3,1), size = (1400, 1000), xlabel = "time", 
-    bottommargin = 5mm, legend = :bottomleft)
-
-
-
-# ### Monte Carlo sampling
-runMonteCarlo = false # slow
-if runMonteCarlo
-    algoSettings = (; algoSettings..., stateSamplingMethod = :montecarlo)
-
-    θpost, Hpost, ϕpost, σ²ₙpost, μpost, nFailure = GibbsTVGLM(Y, priorSettings, modelSettings, 
-        algoSettings);
-
-    println("Monte Carlo failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories") 
-
-    MC_quantiles = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims = 3);
-    PlotPostParamEvolution!(plt, MC_quantiles, "MC($(algoSettings.nMaxIter))", 
-        groupSizes; dateVec = nothing, interval_style = :solid, lw = 2, c = colors[4])
-    plot(plt..., layout = (2,2), size = (1400, 1000), xlabel = "time", 
-        bottommargin = 5mm, legend = :bottomleft)
-end
-
-savefig(figFolder*"PoisSimGroup1.pdf")
+PlotPostParamEvolution!(plt, quant_paramtime,
+    "Laplace($(nPerGroup))$(scalingLabel(scaling))",
+    groupSizes; dateVec=nothing, interpMethod=:constant, plot_t0=keep_t0, interval_style=:dash, lw=3, c=colors[5])

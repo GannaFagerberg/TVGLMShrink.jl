@@ -1,93 +1,147 @@
 # Poisson regression model
 
 # ### Set up the Poisson regression model
-mutable struct ParamTvReg{T,S<:AbstractMatrix{T}}
+mutable struct ParamPoisReg{T,S<:AbstractMatrix{T}}
     Σᵥ::Vector{PDMat{T,S}}
     Z::Vector{Matrix{T}}
 end
 
-observation(param, state, t) = product_distribution(Poisson.(invlink.(param.Z[t] * state)))
-condMean(param, state, t) = invlink.(param.Z[t] * state)
-condCov(param, state, t) = diagm(invlink.(param.Z[t] * state))
+
+observation(param, state, t) = product_distribution(Poisson.(invlink_dgp.(param.Z[t] * state)))
+condMean(param, state, t) = invlink_dgp.(param.Z[t] * state)
+condCov(param, state, t) = diagm(invlink_dgp.(param.Z[t] * state))
 
 
 ## Prior for initial value of the state
-priorμ = [0.5, 0.5] # mean and precision in Poisson dist for μ at t=0
-# This is Z actually
-function prior_t0(priorparam_μ, inflateFactor_ϕ, FisherInfo, κ₀, p)
 
-    ### Prior for state (exp)
-    priorparam_μ =
-        μₘ = priorparam_μ[1] # mean of the Poisson distribution for μ at t=0
-    σ²ₘ = priorparam_μ[2]^2
+function prior_t0(priorparam_λ, FisherInfo, κ₀, p)
 
-    s² = log(σ²ₘ / (μₘ^2) + 1)
-    m = log(μₘ) - s² / 2
-
+    f(x) = priorparam_λ - invlink_dgp(x)
+    m = find_zero(f, 0.0) 
+    
     μ₀ = [m; zeros(p - 1)]
-    Σₘ = inv(1 / T * X[:, 2:end]' * (exp.(X * βₘ) .* X[:, 2:end]))
-
-    Σ₀ = [s² zeros(1, size(Σₘ, 2));
-        zeros(size(Σₘ, 1), 1) Σₘ]
-    Σ₀ = 0.5 * (Σ₀ + Σ₀')
-
-    Finfo = FisherInfo([], μ₀, 0)
-    nugget = 1e-8 * max(1.0, tr(Finfo) / size(Finfo, 1))
-    Finfo = FisherInfo([], μ₀, 0) + nugget * I(length(μ₀)) # Fisher information for all data
+    Finfo = FisherInfo([], μ₀, 0) # Fisher information for one observation
     Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo)
-
-    return μ₀, Σ₀
+    return μ₀, Hermitian(Σ₀)
 
 end
 
 ## Scaling 
-scaling = sqrt(Σ₀)
-scaling = I(p)
-function FisherInfo(θ, μ, t, Xm)
-    if scalingType == :none
-        return I(length(μ))
-    end
-    T = size(Xm, 1)
-    if t > 1
-        S = sqrt(inv((Xm' * Diagonal(exp.(Xm * μ)) * Xm) / T))
-    else
-        S = scaling
-    end
-    if scalingType == :diagonal
-        return Diagonal(diag(S))
-    end
+function FisherInfo(θ, μ, t, X)
+    S = X' * Diagonal(invlink_dgp.(X * μ)) * X
     return S
 end
 
 # Function that computes the Fisher info (not Scaling matrix) for all obs 
-function FisherInfo(θ, μ, t, X, p)
-    return fisher_beta_blocks(Xmean, Xprec, μ[1:p], μ[(p+1):end])
-end
-FisherInfo(θ, μ, t) = FisherInfo(θ, μ, t,
-    X[:, covSel[1]], X[:, covSel[2]], length(covSel[1]), length(covSel[2])
-)
+FisherInfo(θ, μ, t) = FisherInfo(θ, μ, t, X[:, covSel[1]])
 
-# Define function to simulate Poisson regression data with time-varying parameters
-function simulate_poisson_reg_data(T, p, invlink, ρ, σₑ, mₑ, β₀)
-    X = ones(T + 1)
-    for i = 1:(p-1)
-        X = hcat(X, simulateAR(T + 1, ρ[i], σₑ[i], mₑ[i]))
+
+
+function simulateVAR(T, Φ, Σₑ, μ)
+    p = length(Φ)
+    d = size(μ, 1)
+    X = zeros(2*T, d)
+    X[1:p,:] = μ
+    L = sqrt(Σₑ)
+    for t in (p + 1):(2*T)
+        xₜ = copy(μ)
+        for i in 1:p
+            xₜ += Φ[i] * (X[t - i,:] - μ)
+        end
+        xₜ += L * randn(d)
+        X[t,:] = xₜ
     end
-    y = zeros(T + 1)
-    β = zeros(T + 1, p)
-    β[1, :] = β₀
+    return X[(T + 1):end, :]
+end
+
+
+function simulateDSP(T, p, μ, φ, α, β, X, invlink, FisherInfo; initval = zeros(p)')
+    y = zeros(T)
+    λtime = zeros(T)
+    θ = [initval; zeros(T,p)]
+    h = [μ'; zeros(T,p)]
+    η_t = zeros(p)
 
     for t in 2:(T+1)
-        β[t, 1] = sin(2π * t / T)
-        if t < T / 3
-            β[t, 2] = 0
-        elseif t < ((2 / 3) * T)
-            β[t, 2] = -1
-        else
-            β[t, 2] = 1
-        end
-        β[t, 3] = 0.05
-        y[t] = rand(Poisson(invlink_dgp((X[t, :] ⋅ β[t, :]))))
+
+        S = inv(sqrt(FisherInfo([],θ[t-1,:],t-1,X)/T))
+        κ = rand(Beta(β, α), p)
+        η_t = log.(1 ./ κ .- 1)
+
+        h[t,:] = μ + φ .* (h[t-1,:] - μ) + η_t
+
+        Σ_t = S * Diagonal(exp.(h[t,:])) * S
+        Σ_t = Hermitian(Σ_t)
+    
+        ν_t = rand(MvNormal(zeros(p), Σ_t))
+
+        θ[t,:] = θ[t-1,:] + ν_t
     end
-    return y[2:end], X[2:end, :], β
+
+    for i in 1:T
+        λtime[i] = invlink.(dot(θ[i+1,:], X[i,:]))
+        y[i] = rand.(Poisson.(λtime[i]))
+    end
+    return θ[2:end,:], y, λtime
+end
+
+
+function simulate_poisson_reg_data(T, p, covSel, invlink, φ, σₑ, mₑ)
+    X = ones(T + 1)
+    X = hcat(X, simulateVAR(T+1, [φ], σₑ, mₑ))
+    X = X[2:end,:]
+    β, y, λtime = simulateDSP(T, p, [-15, -15,-15], 0.5, 1/2, 1/2, X, invlink,FisherInfo)
+
+    return y, X, β, λtime
+end
+
+
+
+# Plot the parameter evolution path of βₜ
+function plot_param_path_poisreg(β)
+    p = size(β, 2)
+    plt = []
+    for j = 1:p
+        push!(plt, plot(β[:, j], label="true", xlabel="time, " * L"t",
+            ylabel="", title=L"\beta_{%$(j-1)}", color=:black, lw=2))
+    end
+    plt = plot(plt..., layout=(2, 2), size=(1200, 1000), xguidefontsize=12,
+        yguidefontsize=14, titlefontsize=20,
+        legend=:bottomleft, margin=5mm)
+    return plt
+end
+
+# plot \lambda time series
+function plot_poisparam_evolution(λtime)
+
+    p1 = plot(λtime, xlabel="time, " * L"t", title=L"\lambda_t", lw=2,
+        color=colors[1], legend=nothing)
+    plt = plot(p1, layout=(1, 1), size=(1200, 800),
+        xguidefontsize=12, yguidefontsize=14, titlefontsize=18, margin=5mm)
+    return plt
+end
+
+# Plot the evolution of the Poisson density over time and the time series
+function plot_poisdensity_evolution(λtime, y)
+
+    T = length(y)
+    xgrid = 0:2:maximum(y) # grid of x values for plotting the Poisson density
+    pdfvals = zeros(T, length(xgrid))
+    for t in 1:T
+        pdfvals[t, :] = pdf.(Poisson(λtime[t]), xgrid)
+    end
+    pdfvals = pdfvals ./ maximum(pdfvals, dims=2) # Normalize for better color scale
+    # plot a heatmap of the pdf evolution with logpdf scale for the colors
+    p1 = heatmap(1:T, xgrid, pdfvals', clims=(0, 1), color=:Blues,
+        ylabel="density", xlabel="time, " * L"t", colorbar=false,
+        title="evolution of Poisson density over time", colorbar_title="PDF (normalized)",
+        size=(800, 600))
+
+    p2 = plot(y, xlabel="time, " * L"t", ylabel=L"y_t", lw=1,
+        color=colors[3], title="time series", legend=nothing)
+
+    plt = plot(p1, p2, layout=(2, 1), size=(1200, 800),
+        xguidefontsize=12, yguidefontsize=14, titlefontsize=18, margin=5mm)
+    return plt
+
 end
