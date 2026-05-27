@@ -21,6 +21,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     groupsize_common = ceil(Int, mean(groupSizes)) # Assuming common group size.
 
     # Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
+    
     param = staticParam(LogVol2Covs(zeros(length(groupSizes), p)), Z...)
 
     # Define the scaling matrix
@@ -80,7 +81,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
             else
                 (param, state, t) -> begin
                     Smat = ScaleMat(param, state, t)
-                    MvNormal(state, Smat * param.Σᵥ[t] * Smat')
+                    MvNormal(state, Hermitian(Smat * param.Σᵥ[t] * Smat'))
                 end
             end
         end
@@ -97,7 +98,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
                 nParticles=nParticles, nIter=nPrePGAS,
                 nBurn=round(Int, 0.1 * nPrePGAS), nMaxIter=nMaxIter,
                 nPrePGAS=0, offsetMethod=offsetMethod, h_upper=h_upper, polyaoffset=polyaoffset, scaling=scaling, FisherInfo=FisherInfo)
-            θpost0, Hpost0, ϕpost0, σ²ₙpost0, μpost0 = GibbsTVGLM(Y, priorSettings,
+            θpost0, Hpost0, ϕpost0, σ²ₙpost0, μpost0 = GibbsTVGLM(dataSettings, priorSettings,
                 modelSettings, algoSettingsInit)
             μ_prop = median(θpost0[1, :, :]; dims=2)[:]
             Σ_prop = PDMat(cov(θpost0[1, :, :]; dims=2))
