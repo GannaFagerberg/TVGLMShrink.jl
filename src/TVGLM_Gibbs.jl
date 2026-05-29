@@ -21,7 +21,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     groupsize_common = ceil(Int, mean(groupSizes)) # Assuming common group size.
 
     # Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
-    
+
     param = staticParam(LogVol2Covs(zeros(length(groupSizes), p)), Z...)
 
     # Define the scaling matrix
@@ -135,7 +135,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
             end
         elseif stateSamplingMethod == :ffbs_slr
             if scaling === :none
-                 FFBS_SLR!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,
+                FFBS_SLR!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,
                     nMaxIter; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
             else
                 FFBS_SLR!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,
