@@ -83,6 +83,7 @@ modelSettings = (
     staticParam=ParamBetaReg,
     condMean=condMean,
     condCov=condCov,
+    innovModel=:dsp,   # choices: :dsp, :homogaussuniv
     α=1 / 2,
     β=1 / 2,
     updateσₙ=false, # Update σ²ₙ in the Gibbs sampler, or set σₙ = 1
@@ -123,9 +124,9 @@ quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 
 PlotPostParamEvolution!(plt, quant_paramtime,
     "Laplace($(nPerGroup))$(scalingLabel(scaling))",
-    groupSizes; dateVec=nothing, interpMethod=:constant, plot_t0=keep_t0, interval_style=:dash, lw=3, c=colors[4])
+    groupSizes; dateVec=nothing, interpMethod=:constant, plot_t0=keep_t0, interval_style=:dash, lw=3, c=colors[2])
 
-quant_originalT = interpParam2Obs(quant_paramtime, groupSizes,sample_t0=true)
+quant_originalT = interpParam2Obs(quant_paramtime, groupSizes, sample_t0=true)
 size(quant_originalT[1])
 μmedian = invlinkmean(X ⋅ quant_paramtime[:, covSel[1], 2]) # Extract median of μ path
 plot_betadensity_evolution(μtime, ψtime, y)

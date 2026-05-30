@@ -10,7 +10,8 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     ϕ₀, κ₀, m₀, σ₀, ν₀, ψ₀, μ₀, Σ₀ = priorSettings
     stateSamplingMethod, nParticles, nIter, nBurn, nMaxIter, nPrePGAS, offsetMethod,
     h_upper, polyaoffset, scaling, FisherInfo = algoSettings
-    observation, staticParam, condMean, condCov, α, β, updateσₙ, nMixComp = modelSettings
+    observation, staticParam, condMean, condCov, innovModel, α, β, updateσₙ, nMixComp =
+        modelSettings
 
     p = length(μ₀) # number of states
     Tobs = length(y)
@@ -35,6 +36,17 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
         else
             error("Invalid scaling option. Choose :full, :diagonal or :none.")
         end
+
+    # Define update for homoscedastic variance model #TODO: export this
+    # σ²ₖ ~ Inv-χ²(ζ₀, λ²₀) prior for the homo variance of the param innovations
+    # Note that we are here still using H, but every row is the same (homo)
+    function update_homoscedastic!(ν, H, ζ₀=4, λ²₀=exp(m₀ / 2))
+        for k = 1:size(H, 2)
+            ζₙ = ζ₀ + T
+            λ²ₙ = (ζ₀ * λ²₀ + sum(ν[:, k] .^ 2)) / ζₙ
+            H[:, k] .= log.(rand(ScaledInverseChiSq(ζₙ, λ²ₙ)))
+        end
+    end
 
     ## Approximate the log χ²₁ distribution with a mixture of normals
     mixture = SetUpLogChi2Mixture(nMixComp) # Only 5 and 10 component supported
@@ -170,13 +182,19 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
             end
         end
 
-        setOffset!(offset, ν, offsetMethod)
-        if groupsize_common == 1
-            update_dsp!(ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings, mixture, Dᵩ,
-                offset, α, β, updateσₙ, h_upper, polyaoffset)
+        if innovModel == :dsp
+            setOffset!(offset, ν, offsetMethod)
+            if groupsize_common == 1
+                update_dsp!(ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings, mixture, Dᵩ,
+                    offset, α, β, updateσₙ, h_upper, polyaoffset)
+            else
+                update_dsp!(groupsize_common, ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings,
+                    mixture, Dᵩ, offset, α, β, updateσₙ, h_upper, polyaoffset)
+            end
+        elseif innovModel == :homogaussuniv # homoscedastic case
+            update_homoscedastic!(ν, H)
         else
-            update_dsp!(groupsize_common, ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings,
-                mixture, Dᵩ, offset, α, β, updateσₙ, h_upper, polyaoffset)
+            error("the chosen innovation model is not implemented yet.")
         end
 
         if i > nBurn
@@ -190,3 +208,5 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
 
     return θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure
 end
+
+
