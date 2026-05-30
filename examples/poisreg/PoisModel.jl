@@ -65,7 +65,6 @@ function simulateDSP(T, p, μ, φ, α, β, X, invlink, FisherInfo; initval=zeros
     for t in 2:(T+1)
 
         S = inv(sqrt(FisherInfo([], θ[t-1, :], t - 1, X) / T))
-        println(S)
         κ = rand(Beta(β, α), p)
         η_t = log.(1 ./ κ .- 1)
 
