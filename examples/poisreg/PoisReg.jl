@@ -48,7 +48,7 @@ invlink_dgp(x) = exp_lin(x) # Inverse link function for Poisson regression
 σₑ = [1 5; 5 100];        # Noise std for the AR(1) processes that generate the covariates
 mₑ = [0.0, 0.0];     # Mean for the AR(1) processes that generate the covariates
 φ = 0.7
-y, X, β, λtime = simulate_poisson_reg_data(T, p, covSel[1],invlink_dgp, φ, σₑ, mₑ);
+y, X, β, λtime = simulate_poisson_reg_data(T, p, covSel[1], invlink_dgp, φ, σₑ, mₑ);
 
 ## Plot the true parameter paths and the time series
 
@@ -88,6 +88,7 @@ modelSettings = (
     staticParam=ParamPoisReg,
     condMean=condMean,
     condCov=condCov,
+    innovModel=:dsp,   # choices: :dsp, :homogaussuniv
     α=1 / 2,
     β=1 / 2,
     updateσₙ=false, # Update σ²ₙ in the Gibbs sampler, or set σₙ = 1
@@ -128,4 +129,4 @@ quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 
 PlotPostParamEvolution!(plt, quant_paramtime,
     "Laplace($(nPerGroup))$(scalingLabel(scaling))",
-    groupSizes; dateVec=nothing, interpMethod=:constant, plot_t0=keep_t0, interval_style=:dash, lw=3, c=colors[5])
+    groupSizes; dateVec=nothing, interpMethod=:constant, plot_t0=keep_t0, interval_style=:dash, lw=3, c=colors[3])

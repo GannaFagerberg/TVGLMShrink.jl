@@ -17,8 +17,8 @@ condCov(param, state, t) = diagm(invlink_dgp.(param.Z[t] * state))
 function prior_t0(priorparam_λ, FisherInfo, κ₀, p)
 
     f(x) = priorparam_λ - invlink_dgp(x)
-    m = find_zero(f, 0.0) 
-    
+    m = find_zero(f, 0.0)
+
     μ₀ = [m; zeros(p - 1)]
     Finfo = FisherInfo([], μ₀, 0) # Fisher information for one observation
     Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo)
@@ -40,57 +40,57 @@ FisherInfo(θ, μ, t) = FisherInfo(θ, μ, t, X[:, covSel[1]])
 function simulateVAR(T, Φ, Σₑ, μ)
     p = length(Φ)
     d = size(μ, 1)
-    X = zeros(2*T, d)
-    X[1:p,:] = μ
+    X = zeros(2 * T, d)
+    X[1:p, :] = μ
     L = sqrt(Σₑ)
-    for t in (p + 1):(2*T)
+    for t in (p+1):(2*T)
         xₜ = copy(μ)
         for i in 1:p
-            xₜ += Φ[i] * (X[t - i,:] - μ)
+            xₜ += Φ[i] * (X[t-i, :] - μ)
         end
         xₜ += L * randn(d)
-        X[t,:] = xₜ
+        X[t, :] = xₜ
     end
-    return X[(T + 1):end, :]
+    return X[(T+1):end, :]
 end
 
 
-function simulateDSP(T, p, μ, φ, α, β, X, invlink, FisherInfo; initval = zeros(p)')
+function simulateDSP(T, p, μ, φ, α, β, X, invlink, FisherInfo; initval=zeros(p)')
     y = zeros(T)
     λtime = zeros(T)
-    θ = [initval; zeros(T,p)]
-    h = [μ'; zeros(T,p)]
+    θ = [initval; zeros(T, p)]
+    h = [μ'; zeros(T, p)]
     η_t = zeros(p)
 
     for t in 2:(T+1)
 
-        S = inv(sqrt(FisherInfo([],θ[t-1,:],t-1,X)/T))
+        S = inv(sqrt(FisherInfo([], θ[t-1, :], t - 1, X) / T))
         κ = rand(Beta(β, α), p)
         η_t = log.(1 ./ κ .- 1)
 
-        h[t,:] = μ + φ .* (h[t-1,:] - μ) + η_t
+        h[t, :] = μ + φ .* (h[t-1, :] - μ) + η_t
 
-        Σ_t = S * Diagonal(exp.(h[t,:])) * S
+        Σ_t = S * Diagonal(exp.(h[t, :])) * S
         Σ_t = Hermitian(Σ_t)
-    
+
         ν_t = rand(MvNormal(zeros(p), Σ_t))
 
-        θ[t,:] = θ[t-1,:] + ν_t
+        θ[t, :] = θ[t-1, :] + ν_t
     end
 
     for i in 1:T
-        λtime[i] = invlink.(dot(θ[i+1,:], X[i,:]))
+        λtime[i] = invlink.(dot(θ[i+1, :], X[i, :]))
         y[i] = rand.(Poisson.(λtime[i]))
     end
-    return θ[2:end,:], y, λtime
+    return θ[2:end, :], y, λtime
 end
 
 
 function simulate_poisson_reg_data(T, p, covSel, invlink, φ, σₑ, mₑ)
     X = ones(T + 1)
-    X = hcat(X, simulateVAR(T+1, [φ], σₑ, mₑ))
-    X = X[2:end,:]
-    β, y, λtime = simulateDSP(T, p, [-15, -15,-15], 0.5, 1/2, 1/2, X, invlink,FisherInfo)
+    X = hcat(X, simulateVAR(T + 1, [φ], σₑ, mₑ))
+    X = X[2:end, :]
+    β, y, λtime = simulateDSP(T, p, [-15, -15, -15], 0.5, 1 / 2, 1 / 2, X, invlink, FisherInfo)
 
     return y, X, β, λtime
 end
@@ -125,7 +125,7 @@ end
 function plot_poisdensity_evolution(λtime, y)
 
     T = length(y)
-    xgrid = 0:2:maximum(y) # grid of x values for plotting the Poisson density
+    xgrid = 0:1:maximum(y) # grid of x values for plotting the Poisson density
     pdfvals = zeros(T, length(xgrid))
     for t in 1:T
         pdfvals[t, :] = pdf.(Poisson(λtime[t]), xgrid)
