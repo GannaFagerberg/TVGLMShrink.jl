@@ -105,7 +105,7 @@ function plot_param_path_poisreg(β)
         push!(plt, plot(β[:, j], label="true", xlabel="time, " * L"t",
             ylabel="", title=L"\beta_{%$(j-1)}", color=:black, lw=2))
     end
-    plt = plot(plt..., layout=(2, 2), size=(1200, 1000), xguidefontsize=12,
+    plt = plot(plt..., layout=(3, 1), size=(1200, 1000), xguidefontsize=12,
         yguidefontsize=14, titlefontsize=20,
         legend=:bottomleft, margin=5mm)
     return plt
