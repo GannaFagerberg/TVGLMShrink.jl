@@ -25,10 +25,10 @@ function PlotPostParamEvolution!(plts, postquantiles, label, groupSizes=nothing;
         end
         if interval_style == :shaded
             plot!(plts[j], dateVec, postquantiles_obs[:, j, 2],
-                fillrange=postquantiles_obs[:, 1],
+                fillrange=postquantiles_obs[:,j, 1],
                 label=nothing, alpha=alpha; kwargs...)
             plot!(plts[j], dateVec, postquantiles_obs[:, j, 2],
-                fillrange=postquantiles_obs[:, 3],
+                fillrange=postquantiles_obs[:,j, 3],
                 label=nothing, alpha=alpha; kwargs...)
             plot!(plts[j], dateVec, postquantiles_obs[:, j, 2], label=label,
                 legend=legendPos; kwargs...)
