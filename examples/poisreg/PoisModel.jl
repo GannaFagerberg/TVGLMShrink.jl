@@ -1,15 +1,7 @@
 # Poisson regression model
-
-# ### Set up the Poisson regression model
-mutable struct ParamPoisReg{T,S<:AbstractMatrix{T}}
-    Σᵥ::Vector{PDMat{T,S}}
-    Z::Vector{Matrix{T}}
-end
-
-
-observation(param, state, t) = product_distribution(Poisson.(invlink_dgp.(param.Z[t] * state)))
-condMean(param, state, t) = invlink_dgp.(param.Z[t] * state)
-condCov(param, state, t) = diagm(invlink_dgp.(param.Z[t] * state))
+observation(param, state, t) = product_distribution(Poisson.(invlink_dgp.(param.Z[1][t] * state)))
+condMean(param, state, t) = invlink_dgp.(param.Z[1][t] * state)
+condCov(param, state, t) = diagm(invlink_dgp.(param.Z[1][t] * state))
 
 
 ## Prior for initial value of the state
@@ -20,38 +12,26 @@ function prior_t0(priorparam_λ, FisherInfo, κ₀, p)
     m = find_zero(f, 0.0)
 
     μ₀ = [m; zeros(p - 1)]
-    Finfo = FisherInfo([], μ₀, 0) # Fisher information for one observation
+    Finfo = FisherInfo([], μ₀, 0, X) # Fisher information for one observation
     Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo)
     return μ₀, Hermitian(Σ₀)
 
 end
 
 ## Scaling 
-function FisherInfo(θ, μ, t, X)
-    S = X' * Diagonal(invlink_dgp.(X * μ)) * X
+function FisherInfo(param, μ, t)
+    S = XDiagX(param.X[1], invlink_dgp.(param.X[1] * μ)) # does X'Diagonal()*X fast 
     return S
 end
 
-# Function that computes the Fisher info (not Scaling matrix) for all obs 
-FisherInfo(θ, μ, t) = FisherInfo(θ, μ, t, X[:, covSel[1]])
-
-
-
-function simulateVAR(T, Φ, Σₑ, μ)
-    p = length(Φ)
-    d = size(μ, 1)
-    X = zeros(2 * T, d)
-    X[1:p, :] = μ
-    L = sqrt(Σₑ)
-    for t in (p+1):(2*T)
-        xₜ = copy(μ)
-        for i in 1:p
-            xₜ += Φ[i] * (X[t-i, :] - μ)
-        end
-        xₜ += L * randn(d)
-        X[t, :] = xₜ
+# Function that computes the moving average of the covariates
+function moving_average_covariates(X, window_size)
+    T, p = size(X)
+    X_ma = similar(X)
+    for j in 1:p
+        X_ma[:, j] = [mean(X[max(1, t - window_size + 1):t, j]) for t in 1:T]
     end
-    return X[(T+1):end, :]
+    return X_ma
 end
 
 
@@ -95,6 +75,101 @@ function simulate_poisson_reg_data(T, p, covSel, invlink, φ, σₑ, mₑ)
     return y, X, β, λtime
 end
 
+function simulate_poisson_reg_data_fixed(T, p, covSel, invlink, φ, σₑ, mₑ, β₀)
+    X = ones(T + 1)
+    X = hcat(X, simulateVAR(T + 1, [φ], σₑ, mₑ))
+    β = zeros(T + 1, p)
+    β[1, :] = β₀
+    λtime = zeros(T + 1)
+    y = zeros(T + 1)
+
+    for t in 2:(T+1)
+        β[t, 1] = sin(2π * t / T)
+        if t < T / 3
+            β[t, 2] = 0
+        else
+            if t < ((2 / 3) * T)
+                β[t, 2] = -0.5
+            else
+                β[t, 2] = 1.0
+            end
+        end
+        β[t, 3] = -0.05
+
+        λtime[t] = invlink.(dot(β[t, :], X[t, :]))
+        y[t] = rand.(Poisson.(λtime[t]))
+    end
+
+    return y[2:end], X[2:end, :], β[2:end, :], λtime[2:end]
+end
+
+function simulate_poisson_reg_data_fixed_together(T, p, covSel, invlink, φ, σₑ, mₑ, β₀)
+    X = ones(T + 1)
+    X = hcat(X, simulateVAR(T + 1, [φ], σₑ, mₑ))
+    #X = moving_average_covariates(X, 20)
+    β = zeros(T + 1, p)
+    β[1, :] = β₀
+    λtime = zeros(T + 1)
+    y = zeros(T + 1)
+
+    for t in 2:(T+1)
+        β[t, 1] = β₀[1] + sin(2π * t / T)
+        if t < T / 3
+            β[t, 2] = β₀[2]
+            β[t, 3] = β₀[3]
+        else
+            if t < ((2 / 3) * T)
+                β[t, 2] = β₀[2] - 1
+                β[t, 3] = β₀[3] + 0.0
+            else
+                β[t, 2] = β₀[2] + 1
+                β[t, 3] = β₀[3] - 0.3
+            end
+        end
+
+        λtime[t] = invlink.(dot(β[t, :], X[t, :]))
+        y[t] = rand.(Poisson.(λtime[t]))
+    end
+
+    return y[2:end], X[2:end, :], β[2:end, :], λtime[2:end]
+end
+
+
+
+function simulate_poisson_reg_data_fixed_innov(T, p, covSel, invlink, FisherInfo,
+    φ, σₑ, mₑ; initval=zeros(p))
+
+    X = ones(T + 1)
+    X = hcat(X, simulateVAR(T + 1, [φ], σₑ, mₑ))
+    X[:, 2:end] .= X[:, 2:end] .- mean(X, dims=1)[2:end]' # Center the covariates
+
+    μ₀ = [2, 0, 0]
+    Σ₀ = Hermitian(inv(FisherInfo([], μ₀, 0, X) / T))
+
+    β = zeros(T + 1, p)
+    β[1, :] = rand(MvNormal(μ₀, Σ₀))
+    λtime = zeros(T + 1)
+    y = zeros(T + 1)
+
+    S = sqrt(inv(FisherInfo([], μ₀, 0, X) / T))
+
+    println(S)
+
+    for t in 2:(T+1)
+
+        ν = zeros(3)
+        ν[1] = 0.01 * sin(2π * t / T)
+        ν[2] = t == round(Int, T / 3) ? 1 : (t == round(Int, (2 * T / 3)) ? -1.0 : 0.0)
+        ν[3] = t == round(Int, (2 * T / 3)) ? -2 : 0.0
+        S = inv(sqrt(FisherInfo([], β[t-1, :], t - 1, X) / T))
+        β[t, :] = β[t-1, :] + S * ν
+
+        λtime[t] = invlink.(dot(β[t, :], X[t, :]))
+        y[t] = rand.(Poisson.(λtime[t]))
+    end
+
+    return y[2:end], X[2:end, :], β[2:end, :], λtime[2:end]
+end
 
 
 # Plot the parameter evolution path of βₜ

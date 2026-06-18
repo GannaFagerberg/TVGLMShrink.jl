@@ -1,13 +1,5 @@
 # Beta regression with fixed path parameter evolution
 
-# If on SLURM cluster, get SLURM_ARRAY_TASK_ID, otherwise use ARGS for local testing
-if haskey(ENV, "SLURM_ARRAY_TASK_ID")
-    slurm_id = parse(Int, ENV["SLURM_ARRAY_TASK_ID"])
-else
-    slurm_id = isempty(ARGS) ? 0 : parse(Int, ARGS[1])
-end
-println("slurm_id = $slurm_id")
-
 using Pkg
 Pkg.activate(joinpath(@__DIR__, "../.."))
 cd(joinpath(@__DIR__, "../.."))
@@ -15,8 +7,10 @@ using TVGLMShrink
 using Distributions, LaTeXStrings, Plots, LinearAlgebra, Measures, Random
 using PDMats, LogExpFunctions
 using SMCsamplers, DynamicGlobalLocalShrinkage
-using Utils: quantile_multidim
+using Utils: quantile_multidim, get_slurm_id
 using Utils: mvcolors as colors
+slurm_id = get_slurm_id() # get slurm ID, if on cluster
+
 includet("BetaModel.jl")  # Load simulator, Fisher info and plotting for BetaReg
 
 gr(legend=:topleft, grid=false, color=colors[2], lw=2, legendfontsize=12,

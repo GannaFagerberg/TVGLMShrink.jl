@@ -1,3 +1,10 @@
+
+mutable struct staticParam{T,S<:AbstractMatrix{T}}
+    Σᵥ::Vector{PDMat{T,S}}
+    Z::Vector{Vector{Matrix{T}}} # Z[j][k] Tₖ×pₖ matrix for the j:th par and k:th group
+    X::Vector{Matrix{T}} # X[j] T×pₖ matrix of covariates for the j:th par, for scaling
+end
+
 # Set up the Gibbs sampler for a state-space model with:
 # - non-linear/non-Gaussian (NN) observation model
 # - linear Gaussian (LG) state evolution (conditional on Polya-Gamma latents)
@@ -9,37 +16,72 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     y, X, covSel, nPerGroup = dataSettings
     ϕ₀, κ₀, m₀, σ₀, ν₀, ψ₀, μ₀, Σ₀ = priorSettings
     stateSamplingMethod, nParticles, nIter, nBurn, nMaxIter, nPrePGAS, offsetMethod,
-    h_upper, polyaoffset, scaling, FisherInfo = algoSettings
-    observation, staticParam, condMean, condCov, innovModel, α, β, updateσₙ, nMixComp =
-        modelSettings
+    h_upper, polyaoffset, scaling, FisherInfo, nCalibScale = algoSettings
+    observation, condMean, condCov, innovModel, α, β, updateσₙ, nMixComp = modelSettings
 
     p = length(μ₀) # number of states
     Tobs = length(y)
 
     # Setting up data as grouped data
-    Y, Z, groupSizes = splitEqualGroups(y, X, covSel, nPerGroup)
+    Y, Z, Xsel, groupSizes = splitEqualGroups(y, X, covSel, nPerGroup)
     T = length(Y)
     groupsize_common = ceil(Int, mean(groupSizes)) # Assuming common group size.
 
     # Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
+    param = staticParam(LogVol2Covs(zeros(length(groupSizes), p)), Z, Xsel)
 
-    param = staticParam(LogVol2Covs(zeros(length(groupSizes), p)), Z...)
+    collectScaling = true
+    if collectScaling
+        Svec_collect = zeros(p, p, T, nIter) # Storage for scaling matrices
+    else
+        Svec_collect = zeros(0, 0, 0, 0) # Empty array if not collecting scaling matrices
+    end
+    Svec = zeros(p, p, T) # Storage for scaling matrices
+    if scaling == :fullfixed || scaling == :diagonalfixed
+        println("Calibrating Scaling matrix from Laplace with no scaling")
+        algoSettingsCalibrate = (; algoSettings..., scaling=:none,
+            stateSamplingMethod=:ffbs_laplace, nIter=nCalibScale,
+            nBurn=round(Int, 0.1 * nCalibScale))
+        θpost0, _, _, _, _ = GibbsTVGLM(dataSettings, priorSettings, modelSettings,
+            algoSettingsCalibrate)
+        if scaling == :fullfixed
+            for t in 1:T
+                Svec[:, :, t] = sqrt(inv(Symmetric(FisherInfo(param,
+                    median(θpost0[t, :, :]; dims=2), t) / T)))
+            end
+        else
+            for t in 1:T
+                Svec[:, :, t] = Diagonal(diag(sqrt(inv(Symmetric(FisherInfo(param,
+                    median(θpost0[t, :, :]; dims=2), t) / T)))))
+            end
+        end
+    end
 
     # Define the scaling matrix
     ScaleMat =
         if scaling == :full
-            (θ, μ, t) -> inv(sqrt(Symmetric(FisherInfo(θ, μ, t) / Tobs)))
+            (par, μ, t) -> sqrt(inv(Symmetric(FisherInfo(par, μ, t) / T)))
         elseif scaling == :diagonal
-            (θ, μ, t) -> Diagonal(diag(inv(sqrt(Symmetric(FisherInfo(θ, μ, t) / Tobs)))))
+            (par, μ, t) -> Diagonal(diag(sqrt(inv(Symmetric(FisherInfo(par, μ, t) / T)))))
+        elseif scaling == :diagonalfirst
+            (par, μ, t) -> Diagonal(diag(FisherInfo(par, μ, t) / T) .^ (-1 / 2))
+        elseif scaling == :fullfixed || scaling == :diagonalfixed
+            (par, μ, t) -> Svec[:, :, t]
         elseif scaling == :none
-            (θ, μ, t) -> zeros(p, p)
+            (par, μ, t) -> I(p)
         else
-            error("Invalid scaling option. Choose :full, :diagonal or :none.")
+            error("Invalid scaling option. Choose :full, :fullfixed, :diagonal,     
+                :diagonalfixed or :none.")
         end
 
-    # Define update for homoscedastic variance model #TODO: export this
-    # σ²ₖ ~ Inv-χ²(ζ₀, λ²₀) prior for the homo variance of the param innovations
-    # Note that we are here still using H, but every row is the same (homo)
+    #TODO: move this to DynamicGlobalLocalShrinkage.jl and export it
+    """ 
+        update_homoscedastic!(ν, H, ζ₀=4, λ²₀=exp(m₀ / 2))
+
+    Gibbs update of homoscedastic variance instead of DSP
+    using prior σ²ₖ ~ Inv-χ²(ζ₀, λ²₀)
+    Still using the DSP container H, but all row are the same.
+    """
     function update_homoscedastic!(ν, H, ζ₀=4, λ²₀=exp(m₀ / 2))
         for k = 1:size(H, 2)
             ζₙ = ζ₀ + T
@@ -62,7 +104,6 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     θ = zeros(T + 1, p) # Regression coefficients evolution
     Dᵩ = BandedMatrix(-1 => repeat([-ϕ[1]], T - 1), 0 => Ones(T)) # Init D matrix for h_t
 
-    Svec = zeros(p, p, T) # Storage for scaling matrices in Laplace FFBS
     ## Storage
     θpost = zeros(T + 1, p, nIter) # Store regression coefficients
     Hpost = zeros(T, p, nIter) # Store log-volatility evolution
@@ -74,9 +115,9 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
 
     P = zeros(T, nMixComp) # storage for mixture component probabilities
 
-    ## Set up transition model for pgas
     prior = MvNormal(μ₀, Σ₀)
 
+    ## Set up transition model for pgas
     transition =
         if p == 1
             if scaling === :none
@@ -106,12 +147,10 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
         θparticles = zeros(nParticles, p, T + 1) # Initialize PGAS particle container.
         if nPrePGAS > 0
             println("Getting initial values from Laplace")
-            algoSettingsInit = (stateSamplingMethod=:ffbs_laplace,
-                nParticles=nParticles, nIter=nPrePGAS,
-                nBurn=round(Int, 0.1 * nPrePGAS), nMaxIter=nMaxIter,
-                nPrePGAS=0, offsetMethod=offsetMethod, h_upper=h_upper, polyaoffset=polyaoffset, scaling=scaling, FisherInfo=FisherInfo)
-            θpost0, Hpost0, ϕpost0, σ²ₙpost0, μpost0 = GibbsTVGLM(dataSettings, priorSettings,
-                modelSettings, algoSettingsInit)
+            algoSettingsInit = (; algoSettings..., stateSamplingMethod=:ffbs_laplace,
+                nIter=nPrePGAS, nBurn=round(Int, 0.1 * nPrePGAS), nPrePGAS=0, scaling=:none)
+            θpost0, Hpost0, ϕpost0, σ²ₙpost0, μpost0 = GibbsTVGLM(dataSettings,
+                priorSettings, modelSettings, algoSettingsInit)
             μ_prop = median(θpost0[1, :, :]; dims=2)[:]
             Σ_prop = PDMat(cov(θpost0[1, :, :]; dims=2))
             initialization = MvNormal(μ_prop, Σ_prop)
@@ -136,7 +175,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     @showprogress desc = progressMessage enabled = show_progress for i in 1:(nBurn+nIter)
 
         ## Draw state 
-        LogVol2Covs!(param.Σᵥ, H)
+        LogVol2Covs!(param.Σᵥ, H) # Update the covariance matrices for the state 
 
         if stateSamplingMethod == :ffbs_laplace
             if scaling === :none
@@ -203,10 +242,13 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
             ϕpost[:, i-nBurn] = ϕ
             σ²ₙpost[:, i-nBurn] = σ²ₙ
             μpost[:, i-nBurn] = μ
+            if collectScaling
+                Svec_collect[:, :, :, i-nBurn] = Svec
+            end
         end
     end
 
-    return θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure
+    return θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure, Svec_collect
 end
 
 

@@ -37,16 +37,25 @@ df = innerjoin(df_ICU, df_wastewater, on=:date)
 sort!(df, :date)
 println("Joined dataset contains $(nrow(df)) daily observations from $(first(df.date)) to $(last(df.date)).")
 
+# Make lag of the wastewater variable and add to df 
+df.x_lag7 = vcat(fill(missing, 7), df.x[1:end-7])
+df.x_lag14 = vcat(fill(missing, 14), df.x[1:end-14])
 
-maxlag = 4 # maximum lag for the covariates, so we remove nLags first rows
+
+maxlag = 14 # maximum lag for the covariates, so we remove nLags first rows
+
 df = df[maxlag+1:end, :]
 println("$(sum(ismissing.(eachrow(df)))) observations with missing values")
-y = df.layoff_share
+y = df.intensive_case
+
 T = size(y, 1)
 dates = df.date
-X = [ones(T) df.credit_spr_lag1 df.vix_lag1 df.cpi_infl df.sentiment_lag1 df.log_oil_lag1]
+X = [ones(T) df.x_lag7 df.x_lag14]
 X = Matrix{Float64}(X)
-dateVec = year.(df.date) .+ (month.(df.date) .- 1) ./ 12
+
+# let dateVec be a daily date variable in decimal form like 2020.01 or so
+dateVec = [year(d) + (dayofyear(d) - 1) / 365 for d in df.date]
+df.dateVec = dateVec
 
 #covSel = [[1, 2, 3], [2]] # covariates for mean and precision, first covariate is intercept
 #covSel = [[1, 3, 5], [1]] # covariates for mean and precision, first covariate is intercept

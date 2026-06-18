@@ -1,32 +1,25 @@
 #### Beta Regression model
 
-using LinearAlgebra
+using LinearAlgebra, Roots
 using SpecialFunctions   # for trigamma in Fisher info
 
 BetaMean(μ, ψ) = Beta(1.0e-15 + μ * ψ, 1.0e-15 + (1 - μ) * ψ)
 
 ## Set up the Beta regression model
 
-# Static parameter - first field must always be Σᵥ::Vector{PDMat{T,S}}
-mutable struct ParamBetaReg{T,S<:AbstractMatrix{T}}
-    Σᵥ::Vector{PDMat{T,S}}
-    Zmean::Vector{Matrix{T}}
-    Zprec::Vector{Matrix{T}}
-end
-
 invlinkmean(x) = logistic(x) # inverse link function for μ in Beta regression
 invlinkprecision(x) = exp(x) # inverse link function for ψ in Beta regression
 observation(param, state, t) =
     product_distribution(
         BetaMean.(
-            invlinkmean.(param.Zmean[t] * state[1:p]),
-            invlinkprecision.(param.Zprec[t] * state[(p+1):(p+q)])
+            invlinkmean.(param.Z[1][t] * state[1:p]),
+            invlinkprecision.(param.Z[2][t] * state[(p+1):(p+q)])
         )
     )
-condMean(param, state, t) = invlinkmean.(param.Zmean[t] * state[1:p])
+condMean(param, state, t) = invlinkmean.(param.Z[1][t] * state[1:p])
 function condCov(param, state, t)
-    μ = invlinkmean.(param.Zmean[t] * state[1:p])
-    ψ = invlinkprecision.(param.Zprec[t] * state[(p+1):(p+q)])
+    μ = invlinkmean.(param.Z[1][t] * state[1:p])
+    ψ = invlinkprecision.(param.Z[2][t] * state[(p+1):(p+q)])
     return diagm(μ .* (1 .- μ) ./ (1 .+ ψ))
 end
 
@@ -122,28 +115,30 @@ function fisher_beta_blocks(Xm, Xp, βm, βp)
 end
 
 # Function that computes the Fisher info (not Scaling matrix) for all obs 
-function FisherInfo(θ, μ, t, Xmean, Xprec, p, q)
-    return fisher_beta_blocks(Xmean, Xprec, μ[1:p], μ[(p+1):end])
+function FisherInfo(param, μ, t)
+    return fisher_beta_blocks(param.X[1], param.X[2], μ[1:length(param.X[1])],
+        μ[(length(param.X[1])+1):end])
 end
-FisherInfo(θ, μ, t) = FisherInfo(θ, μ, t,
-    X[:, covSel[1]], X[:, covSel[2]], length(covSel[1]), length(covSel[2])
-)
 
-## Prior for initial value of the state
-priorμ = [0.5, 0.5] # mean and precision in Beta dist for μ at t=0
-# This is Z actually
-function prior_t0(priorparam_μ, inflateFactor_ϕ, FisherInfo, κ₀, p, q)
+# This is only for the prior
+function FisherInfo(μ, X)
+    return fisher_beta_blocks(X[:, covSel[1]], X[:, covSel[2]], μ[1:length(covSel[1])],
+        μ[(length(covSel[1])+1):end])
+end
+
+## Prior for initial value of the state using priors on the intercepts and the Fisher info
+function prior_t0(priorparam, FisherInfo, κ₀, p, q)
 
     # μ
     f_μ(x) = priorparam_μ[1] - invlinkmean(x)
     β_m0 = [find_zero(f_μ, 0.0); zeros(p - 1)]
 
-    f_ϕ(x) = priorparam_μ[1] - invlinkprecision(x)
+    f_ϕ(x) = priorparam_μ[2] - invlinkprecision(x)
     β_ϕ0 = [find_zero(f_ϕ, 0.0); zeros(q - 1)]
 
     μ₀ = [β_m0; β_ϕ0]
 
-    Finfo = FisherInfo([], μ₀, 0)
+    Finfo = Hermitian(FisherInfo(μ₀, X))
     Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo)
 
     return μ₀, Σ₀
@@ -255,5 +250,29 @@ function plot_betadensity_evolution(μtime, ψtime, y)
     plt = plot(p1, p2, layout=(2, 1), size=(1200, 800),
         xguidefontsize=12, yguidefontsize=14, titlefontsize=18, margin=5mm)
     return plt
+
+end
+
+
+# Plot the evolution of the Beta density over time and the time series
+function plot_betadensity_fit(μtime, ψtime, y; datevec=1:length(y),
+    timePoints=1:length(y), kwargs...)
+
+    T = length(y)
+    xgrid = 0.001:0.001:0.999
+    pdfvals = zeros(length(timePoints), length(xgrid))
+    for (i, t) in enumerate(timePoints)
+        pdfvals[i, :] = pdf.(BetaMean(μtime[t], ψtime[t]), xgrid)
+    end
+    pdfvals = pdfvals ./ maximum(pdfvals, dims=2) # Normalize for better color scale
+    # plot a heatmap of the pdf evolution with logpdf scale for the colors
+    p1 = heatmap(datevec[timePoints], xgrid, pdfvals', clims=(0, 1), color=:Blues,
+        label="density", xlabel="time, " * L"t", ylabel="", colorbar=false,
+        size=(800, 600); kwargs...)
+
+    plot!(p1, datevec[timePoints], y[timePoints], label="data", lw=2, color=colors[3],
+        legend=nothing)
+
+    return p1
 
 end

@@ -29,12 +29,12 @@ resFolder = joinpath(@__DIR__, "results/")
 
 
 ## observation data
-applName = "layoff_vix_long" # all save files with this prefix
+applName = "layoff_vix" # all save files with this prefix
 df = CSV.read(dataFolder * "/layoff_data.csv", DataFrame)
 maxlag = 4 # maximum lag for the covariates, so we remove nLags first rows
 df = df[maxlag+1:end, :]
 println("$(sum(ismissing.(eachrow(df)))) observations with missing values")
-y = df.layoff_share
+y = df.joblosers_share # df.layoff_share
 T = size(y, 1)
 dates = df.date
 X = [ones(T) df.credit_spr_lag1 df.vix_lag1 df.cpi_infl df.sentiment_lag1 df.log_oil_lag1]
@@ -47,22 +47,15 @@ covSel = [[1, 3], [1]]
 p = length(covSel[1])
 q = length(covSel[2])
 
-
-# Fit using MLE to get a feel for the data
-#Z = X[:,2:end] # remove intercept for BetaRegression package
-#Z = (Z .- mean(Z, dims = 1)) ./ std(Z, dims = 1)
-#y = rand(BetaMean.(0.4, 10), T) # add some noise to the data for better fit
-
 # Link function for the mean and precision
 logistic(x) = 1 / (1 + exp(-x))
 invlinkmean(x) = logistic(x) # Inverse link function for Beta regression
 invlinkprec(x) = exp(x) # Inverse link function for Beta regression
 
 ## The prior for the state at time t=0 using priors on intercepts and Fisher info
-priorparam_μ = [0.15, exp(6)] # Prior for μ ∼ BetaMean(priorparam_μ[1], priorparam_μ[2])
-inflateFactor_ϕ = 1.0 # Inflation factor for prior variance of ϕ
+priorparam = [0.15, exp(6)] # Best guess for y₀ ∼ BetaMean(priorparam_μ[1], priorparam_μ[2])
 κ₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
-μ₀, Σ₀ = prior_t0(priorparam_μ, inflateFactor_ϕ, FisherInfo, κ₀, p, q)
+μ₀, Σ₀ = prior_t0(priorparam, FisherInfo, κ₀, p, q)
 
 # Check that the prior 95% interval to see that they make sense
 priorStd = sqrt.(diag(Σ₀))
@@ -81,7 +74,6 @@ priorSettings = (
 
 modelSettings = (
     observation=observation,
-    staticParam=ParamBetaReg,
     condMean=condMean,
     condCov=condCov,
     innovModel=:dsp,   # choices: :dsp, :homogaussuniv
@@ -104,6 +96,7 @@ algoSettings = (
     scaling=:full,            # Scaling of state innov, can be :full, :diagonal or :none
     FisherInfo=FisherInfo,    # Scaling for the state
 );
+n fjabx899
 
 gr(legend=:topleft, grid=false, color=colors[2], lw=2, legendfontsize=6,
     xtickfontsize=8, ytickfontsize=8, xguidefontsize=10, yguidefontsize=10,
@@ -115,7 +108,7 @@ interpMethod = :linear
 
 # No scaling and nPerGroup = 3
 scaling = :none
-nPerGroup = 3
+nPerGroup = 5
 
 # Options for the posterior predictive check of the fitted distribution over time
 thinFactor = 100
