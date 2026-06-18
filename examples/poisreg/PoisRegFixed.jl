@@ -47,11 +47,11 @@ nCov = 1;       # Total number of covariates, excluding the intercept
 covSel = [[1, 2, 3]] # covariates for mean and precision, first covariate is intercept
 p = length(covSel[1])
 β₀ = [2, 0, 0.0]
-invlink_dgp(x) = exp(x) # Inverse link function for Poisson regression
+invlink(x) = exp(x) # Inverse link function for Poisson regression
 Σₑ = [1 2; 2 10];     # Noise cov for the VAR(1) processes that generate the covariates
 mₑ = [0.0, 0.0];      # Mean for the VAR(1) processes that generate the covariates
-φ = 0.7
-y, X, β, λtime = simulate_poisson_reg_data_fixed_together(T, p, covSel, invlink_dgp,
+φ = 0.0
+y, X, β, λtime = simulate_poisson_reg_data_fixed_together(T, p, covSel, invlink,
     φ, Σₑ, mₑ, β₀)
 println("Proportion of zeros: ", mean(y .== 0))
 
@@ -77,15 +77,12 @@ plot_poisparam_evolution(λtime)
 plot_poisdensity_evolution(λtime, y)
 
 ## The prior for the state at time t=0 using priors on intercepts and Fisher info
-priorparam_λ = mean(y[1:20]) # Prior for λ ∼ lognormal(m, σ²)
+priorparam = mean(y[1:20]) # prior guess for mean near t = 0
+f(x) = priorparam - invlink(x)
+m = find_zero(f, 0.0)
+μ₀ = [m; zeros(p - 1)]
 κ₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
-μ₀, Σ₀ = prior_t0(priorparam_λ, FisherInfo, κ₀, p)
-
-
-# Check that the prior 95% interval to see that they make sense
-priorStd = sqrt.(diag(Σ₀))
-println("Prior interval for the state at time t=0:")
-[μ₀ .- 1.96 * priorStd μ₀ .+ 1.96 * priorStd]
+Σ₀ = :fisherinfo # Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
 
 
 ## Set up the prior, model and algorithm settings
@@ -120,8 +117,9 @@ algoSettings = (
     h_upper=Inf,              # Upper bound for log-volatility
     polyaoffset=0.0,          # Offset for Polya-Gamma variables in the update of h_t
     scaling=:full,            # Scaling of state innov, can be :full, :diagonal or :none
-    FisherInfo=FisherInfo,    # Scaling for the state
-    nCalibScale=500,          # No. iter to calibrate the scaling matrix :fullfixed case
+    FisherInfo=FisherInfoPois,# Fisher info
+    nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
+    verbose=true,             # Whether to print verbose output during sampling.
 );
 
 
@@ -133,7 +131,7 @@ dateVec = 1:T
 keep_t0 = false # Whether to keep the state at time t=0 in the output of the Gibbs sampler
 results = []
 interpMethod = :linear
-scaling = :fullfixed
+scaling = :none
 nPerGroup = 5
 
 ## PGAS
@@ -161,7 +159,7 @@ methodlabel = "Laplace"
 algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_laplace);
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
 
-θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure, Svec = GibbsTVGLM(dataSettings,
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
     priorSettings, modelSettings, algoSettings);
 
 prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);

@@ -16,8 +16,12 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     y, X, covSel, nPerGroup = dataSettings
     ϕ₀, κ₀, m₀, σ₀, ν₀, ψ₀, μ₀, Σ₀ = priorSettings
     stateSamplingMethod, nParticles, nIter, nBurn, nMaxIter, nPrePGAS, offsetMethod,
-    h_upper, polyaoffset, scaling, FisherInfo, nCalibScale = algoSettings
+    h_upper, polyaoffset, scaling, FisherInfo, nCalibScale, verbose = algoSettings
     observation, condMean, condCov, innovModel, α, β, updateσₙ, nMixComp = modelSettings
+
+    if verbose
+        println("$stateSamplingMethod using scaling = $scaling with $nPerGroup obs per group.")
+    end
 
     p = length(μ₀) # number of states
     Tobs = length(y)
@@ -30,7 +34,22 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     # Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
     param = staticParam(LogVol2Covs(zeros(length(groupSizes), p)), Z, Xsel)
 
-    collectScaling = true
+    # Set up prior cov for t=0 state, with option to use Fisher info based prior
+    if Σ₀ == :fisherinfo
+        κ₀ = 1
+        Σ₀ = Hermitian((1 / κ₀) * inv((1 / T) * FisherInfo(param, μ₀, 1)))
+        if verbose
+            println("Prior at t=0 based on Fisher info with κ₀ = $κ₀")
+            priorStd = sqrt.(diag(Σ₀))
+            println("Prior 95% interval for the state at time t=0:")
+            for j in 1:length(μ₀)
+                println("State $j: [", round(μ₀[j] - 1.96 * priorStd[j], digits=3), ", ",
+                    round(μ₀[j] + 1.96 * priorStd[j], digits=3), "]")
+            end
+        end
+    end
+
+    collectScaling = false
     if collectScaling
         Svec_collect = zeros(p, p, T, nIter) # Storage for scaling matrices
     else
@@ -41,18 +60,18 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
         println("Calibrating Scaling matrix from Laplace with no scaling")
         algoSettingsCalibrate = (; algoSettings..., scaling=:none,
             stateSamplingMethod=:ffbs_laplace, nIter=nCalibScale,
-            nBurn=round(Int, 0.1 * nCalibScale))
+            nBurn=round(Int, 0.1 * nCalibScale), verbose=false)
         θpost0, _, _, _, _ = GibbsTVGLM(dataSettings, priorSettings, modelSettings,
             algoSettingsCalibrate)
         if scaling == :fullfixed
             for t in 1:T
-                Svec[:, :, t] = sqrt(inv(Symmetric(FisherInfo(param,
-                    median(θpost0[t, :, :]; dims=2), t) / T)))
+                Svec[:, :, t] = sqrt(inv(Symmetric(groupSizes[t] * FisherInfo(param,
+                    median(θpost0[t, :, :]; dims=2), t) / Tobs)))
             end
-        else
+        else # :diagonal_fixed
             for t in 1:T
-                Svec[:, :, t] = Diagonal(diag(sqrt(inv(Symmetric(FisherInfo(param,
-                    median(θpost0[t, :, :]; dims=2), t) / T)))))
+                Svec[:, :, t] = Diagonal(diag(sqrt(inv(Symmetric(groupSizes[t] *
+                                                                 FisherInfo(param, median(θpost0[t, :, :]; dims=2), t) / Tobs)))))
             end
         end
     end
@@ -60,11 +79,11 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     # Define the scaling matrix
     ScaleMat =
         if scaling == :full
-            (par, μ, t) -> sqrt(inv(Symmetric(FisherInfo(par, μ, t) / T)))
+            (par, μ, t) -> sqrt(inv(Symmetric(groupSizes[t] * FisherInfo(par, μ, t) / Tobs)))
         elseif scaling == :diagonal
-            (par, μ, t) -> Diagonal(diag(sqrt(inv(Symmetric(FisherInfo(par, μ, t) / T)))))
+            (par, μ, t) -> Diagonal(diag(sqrt(inv(Symmetric(groupSizes[t] * FisherInfo(par, μ, t) / Tobs)))))
         elseif scaling == :diagonalfirst
-            (par, μ, t) -> Diagonal(diag(FisherInfo(par, μ, t) / T) .^ (-1 / 2))
+            (par, μ, t) -> Diagonal(diag(groupSizes[t] * FisherInfo(par, μ, t) / Tobs) .^ (-1 / 2))
         elseif scaling == :fullfixed || scaling == :diagonalfixed
             (par, μ, t) -> Svec[:, :, t]
         elseif scaling == :none
@@ -121,20 +140,20 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     transition =
         if p == 1
             if scaling === :none
-                (param, state, t) -> Normal(state, sqrt(param.Σᵥ[t][1]))
+                (param, state, t) -> Normal(state, sqrt(param.Σᵥ[t][1] + eps()))
             else
                 (param, state, t) -> begin
                     Smat = ScaleMat(param, state, t)
-                    Normal(state, Smat[1, 1] * sqrt(param.Σᵥ[t][1]))
+                    Normal(state, Smat[1, 1] * sqrt(param.Σᵥ[t][1] + eps()))
                 end
             end
         else
             if scaling === :none
-                (param, state, t) -> MvNormal(state, param.Σᵥ[t])
+                (param, state, t) -> MvNormal(state, param.Σᵥ[t] + eps() * I)
             else
                 (param, state, t) -> begin
                     Smat = ScaleMat(param, state, t)
-                    MvNormal(state, Hermitian(Smat * param.Σᵥ[t] * Smat'))
+                    MvNormal(state, Hermitian(Smat * param.Σᵥ[t] * Smat' + eps() * I))
                 end
             end
         end
@@ -148,7 +167,8 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
         if nPrePGAS > 0
             println("Getting initial values from Laplace")
             algoSettingsInit = (; algoSettings..., stateSamplingMethod=:ffbs_laplace,
-                nIter=nPrePGAS, nBurn=round(Int, 0.1 * nPrePGAS), nPrePGAS=0, scaling=:none)
+                nIter=nPrePGAS, nBurn=round(Int, 0.1 * nPrePGAS), nPrePGAS=0, scaling=:none,
+                verbose=false)
             θpost0, Hpost0, ϕpost0, σ²ₙpost0, μpost0 = GibbsTVGLM(dataSettings,
                 priorSettings, modelSettings, algoSettingsInit)
             μ_prop = median(θpost0[1, :, :]; dims=2)[:]

@@ -1,39 +1,11 @@
 # Poisson regression model
-observation(param, state, t) = product_distribution(Poisson.(invlink_dgp.(param.Z[1][t] * state)))
-condMean(param, state, t) = invlink_dgp.(param.Z[1][t] * state)
-condCov(param, state, t) = diagm(invlink_dgp.(param.Z[1][t] * state))
-
-
-## Prior for initial value of the state
-
-function prior_t0(priorparam_λ, FisherInfo, κ₀, p)
-
-    f(x) = priorparam_λ - invlink_dgp(x)
-    m = find_zero(f, 0.0)
-
-    μ₀ = [m; zeros(p - 1)]
-    Finfo = FisherInfo([], μ₀, 0, X) # Fisher information for one observation
-    Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo)
-    return μ₀, Hermitian(Σ₀)
-
+observation(param, state, t) = product_distribution(Poisson.(invlink.(param.Z[1][t] * state)))
+condMean(param, state, t) = invlink.(param.Z[1][t] * state)
+condCov(param, state, t) = diagm(invlink.(param.Z[1][t] * state))
+function FisherInfoPois(param, μ, t)
+    F = XDiagX(param.X[1], invlink.(param.X[1] * μ)) # does X'Diagonal()*X fast 
+    return F
 end
-
-## Scaling 
-function FisherInfo(param, μ, t)
-    S = XDiagX(param.X[1], invlink_dgp.(param.X[1] * μ)) # does X'Diagonal()*X fast 
-    return S
-end
-
-# Function that computes the moving average of the covariates
-function moving_average_covariates(X, window_size)
-    T, p = size(X)
-    X_ma = similar(X)
-    for j in 1:p
-        X_ma[:, j] = [mean(X[max(1, t - window_size + 1):t, j]) for t in 1:T]
-    end
-    return X_ma
-end
-
 
 function simulateDSP(T, p, μ, φ, α, β, X, invlink, FisherInfo; initval=zeros(p)')
     y = zeros(T)

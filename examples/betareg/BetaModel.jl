@@ -115,34 +115,9 @@ function fisher_beta_blocks(Xm, Xp, βm, βp)
 end
 
 # Function that computes the Fisher info (not Scaling matrix) for all obs 
-function FisherInfo(param, μ, t)
-    return fisher_beta_blocks(param.X[1], param.X[2], μ[1:length(param.X[1])],
-        μ[(length(param.X[1])+1):end])
-end
-
-# This is only for the prior
-function FisherInfo(μ, X)
-    return fisher_beta_blocks(X[:, covSel[1]], X[:, covSel[2]], μ[1:length(covSel[1])],
-        μ[(length(covSel[1])+1):end])
-end
-
-## Prior for initial value of the state using priors on the intercepts and the Fisher info
-function prior_t0(priorparam, FisherInfo, κ₀, p, q)
-
-    # μ
-    f_μ(x) = priorparam_μ[1] - invlinkmean(x)
-    β_m0 = [find_zero(f_μ, 0.0); zeros(p - 1)]
-
-    f_ϕ(x) = priorparam_μ[2] - invlinkprecision(x)
-    β_ϕ0 = [find_zero(f_ϕ, 0.0); zeros(q - 1)]
-
-    μ₀ = [β_m0; β_ϕ0]
-
-    Finfo = Hermitian(FisherInfo(μ₀, X))
-    Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo)
-
-    return μ₀, Σ₀
-
+function FisherInfoBeta(param, μ, t)
+    return fisher_beta_blocks(param.X[1], param.X[2], μ[1:size(param.X[1], 2)],
+        μ[(size(param.X[1], 2)+1):end])
 end
 
 ## Simulate and plotting functions for the Beta regression model

@@ -1,6 +1,6 @@
 name = "TVGLMShrink"
 uuid = "f0ebfa52-c0a7-45a5-a670-9dbd11d4b463"
-version = "0.3.3"
+version = "0.3.4"
 authors = ["Mattias Villani"]
 
 [deps]

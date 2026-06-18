@@ -51,15 +51,18 @@ plot_betaparam_evolution(μtime, ψtime, αtime, βtime)
 plot_betadensity_evolution(μtime, ψtime, y)
 
 ## The prior for the state at time t=0 using priors on intercepts and Fisher info
-priorparam_μ = [0.5, 0.5] # Prior for μ ∼ BetaMean(0.5, 0.5)
-inflateFactor_ϕ = 1.0 # Inflation factor for prior variance of ϕ
-κ₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
-μ₀, Σ₀ = prior_t0(priorparam_μ, inflateFactor_ϕ, FisherInfo, κ₀, p, q)
+m = mean(y[1:20])
+v = var(y[1:20])
+priorparam = [m, m * (1 - m) / v - 1] # Prior for y₀ ∼ BetaMean(priorparam[1], priorparam[2])
+f_μ(x) = priorparam[1] - invlinkmean(x)
+β_m0 = [find_zero(f_μ, 0.0); zeros(p - 1)]
 
-# Check that the prior 95% interval to see that they make sense
-priorStd = sqrt.(diag(Σ₀))
-println("Prior interval for the state at time t=0:")
-[μ₀ .- 1.96 * priorStd μ₀ .+ 1.96 * priorStd]
+f_ϕ(x) = priorparam[2] - invlinkprecision(x)
+β_ϕ0 = [find_zero(f_ϕ, 0.0); zeros(q - 1)]
+
+μ₀ = [β_m0; β_ϕ0]
+κ₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
+Σ₀ = :fisherinfo # Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
 
 
 ## Set up the prior, model and algorithm settings
@@ -74,7 +77,6 @@ priorSettings = (
 
 modelSettings = (
     observation=observation,
-    staticParam=ParamBetaReg,
     condMean=condMean,
     condCov=condCov,
     innovModel=:dsp,   # choices: :dsp, :homogaussuniv
@@ -87,40 +89,93 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
-    nIter=2000,               # Number of iterations in the Gibbs sampler
-    nBurn=2000,               # Number of burn-in iterations
+    nIter=10000,              # Number of iterations in the Gibbs sampler
+    nBurn=3000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility
     h_upper=Inf,              # Upper bound for log-volatility
     polyaoffset=0.0,          # Offset for Polya-Gamma variables in the update of h_t
     scaling=:full,            # Scaling of state innov, can be :full, :diagonal or :none
-    FisherInfo=FisherInfo,    # Scaling for the state
+    FisherInfo=FisherInfoBeta,# Fisher info
+    nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
+    verbose=true,             # Whether to print verbose output during sampling.
 );
 
+
+dateVec = 1:T
 keep_t0 = false # Whether to keep the state at time t=0 in the output of the Gibbs sampler
 results = []
-## Laplace approximation - full Fisher scaling
-algoSettings = (; algoSettings..., stateSamplingMethod=:ffbs_laplace);
-
-scaling = :diagonal
+interpMethod = :linear
+scaling = :full
 nPerGroup = 5
-algoSettings = (; algoSettings..., scaling=scaling);
+
+## PGAS
+methodlabel = "PGAS"
+algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:pgas);
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
 
 θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
     priorSettings, modelSettings, algoSettings);
 
-println("Laplace failed at $(100*nFailure[]/(algoSettings.nBurn+algoSettings.nIter))% of the simulated trajectories")
+prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
+println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
+    of the simulated trajectories")
 
 # Parameter quantiles on the parameter time scale - this always includes t=0
-quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
+quant_paramtime_pgas = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 
-PlotPostParamEvolution!(plt, quant_paramtime,
-    "Laplace($(nPerGroup))$(scalingLabel(scaling))",
-    groupSizes; dateVec=nothing, interpMethod=:constant, plot_t0=keep_t0, interval_style=:dash, lw=3, c=colors[2])
+#titles = [L"\beta_{%$(j-1)}" for j in 1:p]
+PlotPostParamEvolution!(plt, quant_paramtime_pgas, "PGAS",
+    groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=2, c=colors[1], legend=:bottomleft)
 
-quant_originalT = interpParam2Obs(quant_paramtime, groupSizes, sample_t0=true)
-size(quant_originalT[1])
-μmedian = invlinkmean(X ⋅ quant_paramtime[:, covSel[1], 2]) # Extract median of μ path
-plot_betadensity_evolution(μtime, ψtime, y)
+
+## Laplace approximation 
+methodlabel = "Laplace"
+algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_laplace);
+dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
+
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
+    priorSettings, modelSettings, algoSettings);
+
+prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
+println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
+    of the simulated trajectories")
+
+# Parameter quantiles on the parameter time scale - this always includes t=0
+quant_paramtime_la = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
+
+PlotPostParamEvolution!(plt, quant_paramtime_la, "Laplace",
+    groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=2, c=colors[3])
+
+savefig(figFolder * "$(applName)_param_$(methodlabel)_$(algoSettings.scaling)_$(dataSettings.nPerGroup).svg")
+
+
+## IPLF 
+methodlabel = "IPLF"
+algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_slr);
+dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
+
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
+    priorSettings, modelSettings, algoSettings);
+
+prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
+println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
+    of the simulated trajectories")
+
+# Parameter quantiles on the parameter time scale - this always includes t=0
+quant_paramtime_iplf = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
+
+PlotPostParamEvolution!(plt, quant_paramtime_iplf, "IPLF",
+    groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=2, c=colors[2])
+
+#=
+ylims!(plt[1], (1.75, 2.75))
+plot!(plt[1], legend=:bottomleft)
+ylims!(plt[2], (-0.4, 0.4))
+plot!(plt[2], legend=false)
+ylims!(plt[3], (0.01, 0.06))
+plot!(plt[3], legend=false)
+=#
+
+savefig(figFolder * "$(applName)_param_$(methodlabel)_$(algoSettings.scaling)_$(dataSettings.nPerGroup)_withIPLF.svg")
