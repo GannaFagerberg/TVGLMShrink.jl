@@ -194,3 +194,30 @@ function fisher_scaling_diagonal_first_local(xₜ, d)
     return @. 1 / sqrt(d * (xₜ^2))
 end
 
+
+"""
+    densityScores(θpost, θtrue)
+
+Compute density scores (CRPS, energy score, variogram score) for posterior samples `θpost` against true parameters `θtrue`.
+- `θpost` is T x p x nIter matrix of posterior samples of the parameters at each time point.
+- `θtrue` is T x p matrix of the true parameter values at each time point.
+Returns:
+- `CRPS`: T x p matrix of CRPS scores for each parameter at each time point.
+- `energyScore`: vector of length T with the energy score for the joint distribution of parameters at each time point.
+- `variogramScore`: vector of length T with the variogram score for the joint distribution of parameters at each time point.
+"""
+function densityScores(θpost, θtrue)
+
+    T, p, nIter = size(θpost)
+    CRPS = zeros(T, p)
+    energyScore = zeros(T)
+    variogramScore = zeros(T)
+    for t in 1:T
+        for j in 1:p
+            CRPS[t, j] = crps(θpost[t, j, :], θtrue[t, j])
+        end
+        energyScore[t] = energy_score(θpost[t, :, :]', θtrue[t, :])
+        variogramScore[t] = variogram_score(θpost[t, :, :]', θtrue[t, :])
+    end
+    return CRPS, energyScore, variogramScore
+end

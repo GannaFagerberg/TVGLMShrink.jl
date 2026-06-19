@@ -12,6 +12,6 @@ export PlotPostParamEvolution, PlotPostParamEvolution!, post_pred_check_distr
 
 include("TVGLMUtils.jl")
 export exp_lin, exp_lin_inv, simulateAR, simulateVAR, interpParam2Obs, scalingLabel
-export XDiagX
+export XDiagX, densityScores
 
 end

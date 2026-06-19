@@ -1,15 +1,4 @@
-# Poisson Regression with Parameters Sampled from a DSP Prior
-
-# In this example we explore the joint posterior in the Poisson regression model with parameters following independent dynamic shrinkage process priors.
-#
-# ```math
-# \begin{align*}
-#   y_t \vert \boldsymbol{x}_t &\sim \mathrm{Poisson}\big( \exp(\boldsymbol{x}_t^\top \boldsymbol{\beta}_t) \big) \\
-# \boldsymbol{\beta}_t &= \boldsymbol{\beta}_{t-1} + \boldsymbol{\nu}_t, \quad \boldsymbol{\nu}_t \sim N\Big(\boldsymbol{0},\mathrm{Diag}(\exp(\boldsymbol{h}_t/2))\Big) \\
-#   \boldsymbol{h}_t &= \boldsymbol{\mu} + \phi(\boldsymbol{h}_{t-1} -\boldsymbol{\mu}) + \boldsymbol{\eta}_t, \quad \boldsymbol{\eta}_t \sim Z(\alpha,\alpha, 0, \sigma_\eta) \\
-# \end{align*}
-# ```
-#
+# Poisson Regression with Fixed parameter paths
 
 # If on SLURM cluster, get SLURM_ARRAY_TASK_ID, otherwise use ARGS for local testing
 if haskey(ENV, "SLURM_ARRAY_TASK_ID")
@@ -127,12 +116,17 @@ gr(legend=:topleft, grid=false, color=colors[2], lw=2, legendfontsize=10,
     xtickfontsize=10, ytickfontsize=10, xguidefontsize=12, yguidefontsize=12,
     titlefontsize=14, markerstrokecolor=:auto)
 
+thinFactor = 10 # thinning out draws before computing density scores
 dateVec = 1:T
 keep_t0 = false # Whether to keep the state at time t=0 in the output of the Gibbs sampler
-results = []
 interpMethod = :linear
 scaling = :none
 nPerGroup = 5
+CRPSAll = []
+energyScoreAll = []
+variogramScoreAll = []
+MethodLabels = []
+
 
 ## PGAS
 methodlabel = "PGAS"
@@ -149,13 +143,21 @@ println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)%
 # Parameter quantiles on the parameter time scale - this always includes t=0
 quant_paramtime_pgas = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 
-#titles = [L"\beta_{%$(j-1)}" for j in 1:p]
-PlotPostParamEvolution!(plt, quant_paramtime_pgas, "PGAS",
+PlotPostParamEvolution!(plt, quant_paramtime_pgas, methodlabel,
     groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=2, c=colors[1], legend=:bottomleft)
 
+θ_obstime, _ = interpParam2Obs(θpost, groupSizes; sample_t0=true,
+    interpMethod=interpMethod);
+θ_obstime = θ_obstime[:, :, 1:thinFactor:end];
 
-## Laplace approximation 
-methodlabel = "Laplace"
+CRPS, energyScore, variogramScore = densityScores(θ_obstime, β)
+push!(CRPSAll, CRPS)
+push!(energyScoreAll, energyScore)
+push!(variogramScoreAll, variogramScore)
+push!(MethodLabels, methodlabel)
+
+## Laplace approximation - none
+methodlabel = "Laplace-None"
 algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_laplace);
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
 
@@ -167,15 +169,83 @@ println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)%
     of the simulated trajectories")
 
 # Parameter quantiles on the parameter time scale - this always includes t=0
-quant_paramtime_la = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
+quant_paramtime_lanone = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 
-PlotPostParamEvolution!(plt, quant_paramtime_la, "Laplace",
+PlotPostParamEvolution!(plt, quant_paramtime_lanone, methodlabel,
     groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=2, c=colors[3])
 
-savefig(figFolder * "$(applName)_param_$(methodlabel)_$(algoSettings.scaling)_$(dataSettings.nPerGroup).svg")
+θ_obstime, _ = interpParam2Obs(θpost, groupSizes; sample_t0=true,
+    interpMethod=interpMethod);
+θ_obstime = θ_obstime[:, :, 1:thinFactor:end];
+
+CRPS, energyScore, variogramScore = densityScores(θ_obstime, β)
+push!(CRPSAll, CRPS)
+push!(energyScoreAll, energyScore)
+push!(variogramScoreAll, variogramScore)
+push!(MethodLabels, methodlabel)
 
 
-## IPLF 
+## Laplace approximation - diagonal
+scaling = :diagonal
+methodlabel = "Laplace-Diag"
+algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_laplace);
+dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
+
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings);
+
+prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
+println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
+    of the simulated trajectories")
+
+# Parameter quantiles on the parameter time scale - this always includes t=0
+quant_paramtime_ladiag = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
+
+PlotPostParamEvolution!(plt, quant_paramtime_ladiag, methodlabel,
+    groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=2, c=colors[2])
+
+θ_obstime, _ = interpParam2Obs(θpost, groupSizes; sample_t0=true,
+    interpMethod=interpMethod);
+θ_obstime = θ_obstime[:, :, 1:thinFactor:end];
+
+CRPS, energyScore, variogramScore = densityScores(θ_obstime, β)
+push!(CRPSAll, CRPS)
+push!(energyScoreAll, energyScore)
+push!(variogramScoreAll, variogramScore)
+push!(MethodLabels, methodlabel)
+
+
+## Laplace approximation - full
+scaling = :full
+methodlabel = "Laplace-Full"
+algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_laplace);
+dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
+
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
+    priorSettings, modelSettings, algoSettings);
+
+prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
+println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
+    of the simulated trajectories")
+
+# Parameter quantiles on the parameter time scale - this always includes t=0
+quant_paramtime_lafull = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
+
+PlotPostParamEvolution!(plt, quant_paramtime_lafull, methodlabel,
+    groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=2, c=colors[4])
+
+θ_obstime, _ = interpParam2Obs(θpost, groupSizes; sample_t0=true,
+    interpMethod=interpMethod);
+θ_obstime = θ_obstime[:, :, 1:thinFactor:end];
+
+CRPS, energyScore, variogramScore = densityScores(θ_obstime, β)
+push!(CRPSAll, CRPS)
+push!(energyScoreAll, energyScore)
+push!(variogramScoreAll, variogramScore)
+push!(MethodLabels, methodlabel)
+
+
+## IPLF - none
+scaling = :none
 methodlabel = "IPLF"
 algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_slr);
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
@@ -190,16 +260,55 @@ println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)%
 # Parameter quantiles on the parameter time scale - this always includes t=0
 quant_paramtime_iplf = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 
-PlotPostParamEvolution!(plt, quant_paramtime_iplf, "IPLF",
+PlotPostParamEvolution!(plt, quant_paramtime_iplf, methodlabel,
     groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=2, c=colors[2])
 
-#=
-ylims!(plt[1], (1.75, 2.75))
-plot!(plt[1], legend=:bottomleft)
-ylims!(plt[2], (-0.4, 0.4))
-plot!(plt[2], legend=false)
-ylims!(plt[3], (0.01, 0.06))
-plot!(plt[3], legend=false)
-=#
+θ_obstime, _ = interpParam2Obs(θpost, groupSizes; sample_t0=true,
+    interpMethod=interpMethod);
+θ_obstime = θ_obstime[:, :, 1:thinFactor:end];
 
-savefig(figFolder * "$(applName)_param_$(methodlabel)_$(algoSettings.scaling)_$(dataSettings.nPerGroup)_withIPLF.svg")
+CRPS, energyScore, variogramScore = densityScores(θ_obstime, β)
+push!(CRPSAll, CRPS)
+push!(energyScoreAll, energyScore)
+push!(variogramScoreAll, variogramScore)
+push!(MethodLabels, methodlabel)
+
+savefig(figFolder * "$(applName)_param_$(dataSettings.nPerGroup).svg")
+
+
+## Plot density scores
+nMethods = length(MethodLabels)
+
+# plot the CRPS over time for each parameter
+plt_crps = []
+for j in 1:p
+    (j == 1) ? legendPos = :topleft : legendPos = false
+    push!(plt_crps, plot(1:T, CRPSAll[1][:, j], label=MethodLabels[1], lw=2,
+        color=colors[1], title="CRPS for " * L"\beta_{%$(j-1)}", legend=legendPos))
+    for i in 2:nMethods
+        plot!(1:T, CRPSAll[i][:, j], label=MethodLabels[i], lw=2, color=colors[1+i])
+    end
+end
+plot(plt_crps..., layout=(1, p), size=(1200, 400), xguidefontsize=12, yguidefontsize=14,
+    titlefontsize=18, margin=5mm)
+savefig(figFolder * "$(applName)_crps_$(dataSettings.nPerGroup).svg")
+
+# plot the energy score over time
+plot(1:T, energyScoreAll[1][:], label=MethodLabels[1], lw=2, color=colors[1],
+    title="Energy Score")
+for i in 2:nMethods
+    plot!(1:T, energyScoreAll[i][:], label=MethodLabels[i], lw=2, color=colors[1+i])
+end
+plot!(size=(1200, 400), xguidefontsize=12, yguidefontsize=14, titlefontsize=18, margin=5mm)
+savefig(figFolder * "$(applName)_energy_$(dataSettings.nPerGroup).svg")
+
+
+# plot the variogram score over time
+plot(1:T, variogramScoreAll[1][:, 1], label=MethodLabels[1], lw=2, color=colors[1],
+    title="Variogram Score")
+for i in 2:nMethods
+    plot!(1:T, variogramScoreAll[i][:, 1], label=MethodLabels[i], lw=2, color=colors[1+i])
+end
+plot!(size=(1200, 400), xguidefontsize=12, yguidefontsize=14, titlefontsize=18, margin=5mm)
+savefig(figFolder * "$(applName)_variogram_$(dataSettings.nPerGroup).svg")
+
