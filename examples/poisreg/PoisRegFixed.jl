@@ -17,8 +17,11 @@ using PDMats, LogExpFunctions
 using SMCsamplers, DynamicGlobalLocalShrinkage
 using Utils: quantile_multidim
 using Utils: mvcolors as colors
-using Roots
-includet("PoisModel.jl")  # Load simulator, Fisher info and plotting for PoisReg
+using GLM
+using Roots: find_zero
+include("PoisModel.jl")  # PoisReg model and Fisher info
+include("PoisModelUtils.jl")  # Load simulator, plotting for PoisReg
+
 
 figFolder = joinpath(@__DIR__, "figures/")
 resFolder = joinpath(@__DIR__, "results/")
@@ -36,14 +39,13 @@ nCov = 1;       # Total number of covariates, excluding the intercept
 covSel = [[1, 2, 3]] # covariates for mean and precision, first covariate is intercept
 p = length(covSel[1])
 β₀ = [2, 0, 0.0]
-invlink(x) = exp(x) # Inverse link function for Poisson regression
+link = (LogLink(),)
 Σₑ = [1 2; 2 10];     # Noise cov for the VAR(1) processes that generate the covariates
 mₑ = [0.0, 0.0];      # Mean for the VAR(1) processes that generate the covariates
-φ = 0.0
-y, X, β, λtime = simulate_poisson_reg_data_fixed_together(T, p, covSel, invlink,
-    φ, Σₑ, mₑ, β₀)
-println("Proportion of zeros: ", mean(y .== 0))
+Φ = [diagm([0.5, 0.5])] # AR(1) coefficients for the covariate processes
+y, X, β, λtime = simulate_poisson_reg_data(T, p, covSel, link, Φ, Σₑ, mₑ)
 
+println("Proportion of zeros: ", mean(y .== 0))
 
 
 ## Plot the true parameter paths and the time series
@@ -67,7 +69,7 @@ plot_poisdensity_evolution(λtime, y)
 
 ## The prior for the state at time t=0 using priors on intercepts and Fisher info
 priorparam = mean(y[1:20]) # prior guess for mean near t = 0
-f(x) = priorparam - invlink(x)
+f(x) = priorparam - linkinv(link[1], x)
 m = find_zero(f, 0.0)
 μ₀ = [m; zeros(p - 1)]
 κ₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
@@ -86,6 +88,7 @@ priorSettings = (
 
 modelSettings = (
     observation=observation,
+    link=link,
     condMean=condMean,
     condCov=condCov,
     innovModel=:dsp,   # choices: :dsp, :homogaussuniv
@@ -294,20 +297,20 @@ plot(plt_crps..., layout=(1, p), size=(1200, 400), xguidefontsize=12, yguidefont
 savefig(figFolder * "$(applName)_crps_$(dataSettings.nPerGroup).svg")
 
 # plot the energy score over time
-plot(1:T, energyScoreAll[1][:], label=MethodLabels[1], lw=2, color=colors[1],
+plot(1:T, energyScoreAll[1], label=MethodLabels[1], lw=2, color=colors[1],
     title="Energy Score")
 for i in 2:nMethods
-    plot!(1:T, energyScoreAll[i][:], label=MethodLabels[i], lw=2, color=colors[1+i])
+    plot!(1:T, energyScoreAll[i], label=MethodLabels[i], lw=2, color=colors[1+i])
 end
 plot!(size=(1200, 400), xguidefontsize=12, yguidefontsize=14, titlefontsize=18, margin=5mm)
 savefig(figFolder * "$(applName)_energy_$(dataSettings.nPerGroup).svg")
 
 
 # plot the variogram score over time
-plot(1:T, variogramScoreAll[1][:, 1], label=MethodLabels[1], lw=2, color=colors[1],
+plot(1:T, variogramScoreAll[1], label=MethodLabels[1], lw=2, color=colors[1],
     title="Variogram Score")
 for i in 2:nMethods
-    plot!(1:T, variogramScoreAll[i][:, 1], label=MethodLabels[i], lw=2, color=colors[1+i])
+    plot!(1:T, variogramScoreAll[i], label=MethodLabels[i], lw=2, color=colors[1+i])
 end
 plot!(size=(1200, 400), xguidefontsize=12, yguidefontsize=14, titlefontsize=18, margin=5mm)
 savefig(figFolder * "$(applName)_variogram_$(dataSettings.nPerGroup).svg")

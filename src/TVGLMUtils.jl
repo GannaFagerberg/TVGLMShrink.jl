@@ -1,14 +1,4 @@
 using LinearAlgebra
-# exponential function with linear tail after x = x₀
-function exp_lin(x; x₀=7)
-    return x <= x₀ ? exp(x) : exp(x₀) + exp(x₀) * (x - x₀)
-end
-
-# inverse of exp_lin function
-function exp_lin_inv(y; x₀=7)
-    y₀ = exp(x₀)
-    return y <= y₀ ? log(y) : x₀ + (y - y₀) / y₀
-end
 
 """
     simulateAR(T, ϕ, σₑ, μ=0)
@@ -161,15 +151,41 @@ Efficiently compute the diagonal of X' * Diagonal(d) * X without forming the dia
 """
 function DiagXDiagX(X, d)
     n, p = size(X)
-    d_out = zeros(eltype(X), p)
+    S = promote_type(eltype(X), eltype(d))
+    d_out = zeros(S, p)
     @inbounds for j in 1:p
-        value = zero(eltype(X))
+        value = zero(S)
         for k in 1:n
             value += d[k] * X[k, j]^2
         end
         d_out[j] = value
     end
     return d_out
+end
+
+""" 
+    XDiagZ(X, d)
+
+Efficiently compute X' * Diagonal(d) * Z without forming the diagonal matrix.
+- X is n x p
+- d is a vector of length n
+- Z is n x q
+"""
+function XDiagZ(X, d, Z)
+    n, p = size(X)
+    _, q = size(Z)
+    S = promote_type(eltype(X), eltype(d), eltype(Z))
+    XDZ = zeros(S, p, q)
+    @inbounds for j in 1:p
+        for l in 1:q
+            value = zero(S)
+            for k in 1:n
+                value += d[k] * X[k, j] * Z[k, l]
+            end
+            XDZ[j, l] = value
+        end
+    end
+    return XDZ
 end
 
 """

@@ -104,7 +104,7 @@ end
 
 
 """
-    post_pred_check_distr(y, θ_obstime, distr, ygrid, X, covSel, invlinks;
+    postPredCheckDistr(y, θ_obstime, distr, ygrid, X, covSel, link;
         dateVec=1:length(y), timePoints=1:length(y), thinFactor=10)
 
 Posterior predictive check of the fitted distribution of the response over time.
@@ -114,13 +114,13 @@ Posterior predictive check of the fitted distribution of the response over time.
     - `ygrid`: a grid of y values for plotting the density
     - `X`: the covariate matrix used in the model, with dimensions T x nCov
     - `covSel`: a vector of vectors. covSel[j] are the column indices of X that are used for the j-th parameter of the distribution.
-    - `invlinks`: a tuple of inverse link functions for each parameter
+    - `link`: a tuple of link functions for each parameter
     - `dateVec`: a vector of dates corresponding to the time points, used for plotting
     - `timePoints`: a vector of time points to plot (e.g. 1:T or a subset of time points)
     - `thinFactor`: thin factor for the Gibbs samples.
 """
 
-function post_pred_check_distr(y, θ_obstime, distr, ygrid, X, covSel, invlinks;
+function postPredCheckDistr(y, θ_obstime, distr, ygrid, X, covSel, link;
     dateVec=1:length(y), timePoints=1:length(y), thinFactor=10, kwargs...)
     T, _, nIter = size(θ_obstime)
     nDistrParams = length(covSel)
@@ -132,7 +132,7 @@ function post_pred_check_distr(y, θ_obstime, distr, ygrid, X, covSel, invlinks;
         linPred = zeros(length(timePoints), nIter)
         for (t, time) in enumerate(timePoints)
             for (i, iter) in enumerate(1:thinFactor:nIter)
-                param_time[t, j, i] = invlinks[j].(X[time, covSel[j]] ⋅ θ_obstime[time, start:(start+ps[j]-1), iter])
+                param_time[t, j, i] = linkinv.(link[j], X[time, covSel[j]] ⋅ θ_obstime[time, start:(start+ps[j]-1), iter])
             end
         end
         start = start + ps[j]

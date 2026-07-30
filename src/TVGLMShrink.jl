@@ -3,15 +3,24 @@ module TVGLMShrink
 using Distributions, LinearAlgebra, ProgressMeter, BandedMatrices, Plots, LaTeXStrings
 using PDMats, LogExpFunctions
 using SMCsamplers, DynamicGlobalLocalShrinkage, Utils
+using GLM: Link
+import GLM: linkfun, linkinv, mueta
+export linkfun, linkinv, mueta
+using SpecialFunctions: digamma, trigamma
+using Roots: find_zero
+
 
 include("TVGLM_Gibbs.jl")
 export GibbsTVGLM
 
 include("TVGLMPlots.jl")
-export PlotPostParamEvolution, PlotPostParamEvolution!, post_pred_check_distr
+export PlotPostParamEvolution, PlotPostParamEvolution!, postPredCheckDistr
 
 include("TVGLMUtils.jl")
 export exp_lin, exp_lin_inv, simulateAR, simulateVAR, interpParam2Obs, scalingLabel
-export XDiagX, densityScores
+export XDiagX, XDiagZ, densityScores
+
+include("TVGLMModels.jl")
+export TVGLMmodel, LogLinLink
 
 end

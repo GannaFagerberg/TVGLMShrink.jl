@@ -11,15 +11,14 @@ using Utils: quantile_multidim, get_slurm_id
 using Utils: mvcolors as colors
 slurm_id = get_slurm_id() # get slurm ID, if on cluster
 
-includet("BetaModel.jl")  # Load simulator, Fisher info and plotting for BetaReg
+include(joinpath(@__DIR__, "../..") * "/examples/betareg/BetaModel.jl") # BetaReg stuff
+include(joinpath(@__DIR__, "../..") * "/examples/betareg/BetaModelUtils.jl") # BetaReg stuff
 
 gr(legend=:topleft, grid=false, color=colors[2], lw=2, legendfontsize=12,
     xtickfontsize=12, ytickfontsize=12, xguidefontsize=12, yguidefontsize=12,
     titlefontsize=18, markerstrokecolor=:auto)
 
 Random.seed!(slurm_id); # set seed for reproducibility, different seed for each slurm_id
-
-BetaMean(μ, ψ) = Beta(1.0e-15 + μ * ψ, 1.0e-15 + (1 - μ) * ψ)
 
 # Simulate data from the Beta regression model with fixed parameter paths
 T = 500;
@@ -29,15 +28,13 @@ p = length(covSel[1])
 q = length(covSel[2])
 β₀ = [0.0, 0, -0.05]
 γ₀ = [1]        # log precision intercept
-logistic(x) = 1 / (1 + exp(-x))
-invlinkmean(x) = logistic(x) # Inverse link function for Beta regression
-invlinkprec(x) = exp(x) # Inverse link function for Beta regression
+link = (LogitLink(), LogLink())
 ρ = [0.7, 0.7];      # AR(1) coefficients for the covariate processes
 σₑ = [1, 10];        # Noise std for the AR(1) processes that generate the covariates
 mₑ = [0.0, 0.0];     # Mean for the AR(1) processes that generate the covariates
 
 y, X, β, γ, μtime, ψtime, αtime, βtime = simulate_beta_reg_data(T, nCov, covSel,
-    invlinkmean, invlinkprec, ρ, σₑ, mₑ, β₀, γ₀);
+    x -> linkinv(link[1], x), x -> linkinv(link[2], x), ρ, σₑ, mₑ, β₀, γ₀);
 
 ## Plot the true parameter paths and the time series
 
@@ -54,10 +51,10 @@ plot_betadensity_evolution(μtime, ψtime, y)
 m = mean(y[1:20])
 v = var(y[1:20])
 priorparam = [m, m * (1 - m) / v - 1] # Prior for y₀ ∼ BetaMean(priorparam[1], priorparam[2])
-f_μ(x) = priorparam[1] - invlinkmean(x)
+f_μ(x) = priorparam[1] - linkinv(link[1], x)
 β_m0 = [find_zero(f_μ, 0.0); zeros(p - 1)]
 
-f_ϕ(x) = priorparam[2] - invlinkprecision(x)
+f_ϕ(x) = priorparam[2] - linkinv(link[2], x)
 β_ϕ0 = [find_zero(f_ϕ, 0.0); zeros(q - 1)]
 
 μ₀ = [β_m0; β_ϕ0]
@@ -77,6 +74,7 @@ priorSettings = (
 
 modelSettings = (
     observation=observation,
+    link=link,
     condMean=condMean,
     condCov=condCov,
     innovModel=:dsp,   # choices: :dsp, :homogaussuniv
@@ -89,8 +87,8 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
-    nIter=10000,              # Number of iterations in the Gibbs sampler
-    nBurn=3000,               # Number of burn-in iterations
+    nIter=5000,              # Number of iterations in the Gibbs sampler
+    nBurn=1000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility
@@ -107,7 +105,7 @@ dateVec = 1:T
 keep_t0 = false # Whether to keep the state at time t=0 in the output of the Gibbs sampler
 results = []
 interpMethod = :linear
-scaling = :full
+scaling = :none
 nPerGroup = 5
 
 ## PGAS
