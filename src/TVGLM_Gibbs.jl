@@ -176,8 +176,8 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     nFailure = Ref(0)
 
     if haskey(ENV, "SLURM_JOB_ID")
-        progessbar.status = false
-    end # No progress bar on cluster
+        progessbar = (; progessbar..., status=false)
+    end
     @showprogress desc = progessbar.message enabled = progessbar.status for i in 1:(nBurn+nIter)
 
         ## Draw state 
