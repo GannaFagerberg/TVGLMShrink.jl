@@ -40,7 +40,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     # Set up prior cov for t=0 state, with option to use Fisher info based prior
     if Σ₀ == :fisherinfo
         κ₀ = 1
-        Σ₀ = Hermitian((1 / κ₀) * inv((1 / T) * FisherInfo(param, μ₀, 1)))
+        Σ₀ = Hermitian((size(X, 2) / κ₀) * inv(FisherInfo(param, μ₀, 1)))
         if verbose
             println("Prior at t=0 based on Fisher info with κ₀ = $κ₀")
             priorStd = sqrt.(diag(Σ₀))
