@@ -10,7 +10,7 @@ BetaMean(μ, ψ) = Beta(1.0e-15 + μ * ψ, 1.0e-15 + (1 - μ) * ψ)
 observation(param, state, t) =
     @views product_distribution(
         BetaMean.(
-            linkinv.(param.link[1], param.Z[1][t] * state[param.Zidx[1]]),
+            GLM.linkinv.(param.link[1], param.Z[1][t] * state[param.Zidx[1]]),
             linkinv.(param.link[2], param.Z[2][t] * state[param.Zidx[2]])
         )
     )
@@ -30,9 +30,9 @@ end
 
 function fisher_beta_blocks(Xm, Xp, βm, βp, linkm::Link, linkp::Link)
 
-    μ = linkinv.(linkm, Xm * βm)
+    μ = GLM.linkinv.(linkm, Xm * βm)
     ϕ = linkinv.(linkp, Xp * βp)
-    dμ = mueta.(linkm, Xm * βm)   # dμ/dηm
+    dμ = GLM.mueta.(linkm, Xm * βm)   # dμ/dηm
     dϕ = mueta.(linkp, Xp * βp)   # dϕ/dηp
 
     a = μ .* ϕ
@@ -65,4 +65,11 @@ end
 function FisherInfoBeta(param, μ, t)
     return fisher_beta_blocks(param.X[1], param.X[2], μ[1:size(param.X[1], 2)],
         μ[(size(param.X[1], 2)+1):end], param.link[1], param.link[2])
+end
+
+
+# Function that computes the Fisher info (not Scaling matrix) for all obs 
+function FisherInfoBeta_local(param, μ, t)
+    return fisher_beta_blocks(param.Z[t][1], param.Z[t][2], μ[1:size(param.Z[t][1], 2)],
+        μ[(size(param.Z[t][1], 2)+1):end], param.link[1], param.link[2])
 end

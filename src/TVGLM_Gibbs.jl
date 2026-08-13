@@ -83,7 +83,9 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
         if scaling == :full
             (par, μ, t) -> sqrt(inv(Symmetric(groupSizes[t] * FisherInfo(par, μ, t) / Tobs)))
         elseif scaling == :fulllocal
-            (par, μ, t) -> sqrt(pinv(Symmetric(groupSizes[t] * FisherInfo(par, μ, t) / Tobs)))
+            (par, μ, t) -> sqrt(pinv(Symmetric(FisherInfo(par, μ, t))))
+        elseif scaling == :diaglocal
+            (par, μ, t) -> Diagonal(diag(sqrt(inv(Symmetric(FisherInfo(par, μ, t))))))
         elseif scaling == :diagonal
             (par, μ, t) -> Diagonal(diag(sqrt(inv(Symmetric(groupSizes[t] * FisherInfo(par, μ, t) / Tobs)))))
         elseif scaling == :diagonalfirst

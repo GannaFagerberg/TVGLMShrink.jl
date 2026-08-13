@@ -9,6 +9,8 @@ using PDMats, LogExpFunctions
 using SMCsamplers, DynamicGlobalLocalShrinkage
 using Utils: quantile_multidim, get_slurm_id
 using Utils: mvcolors as colors
+using GLM
+using Roots
 slurm_id = get_slurm_id() # get slurm ID, if on cluster
 
 include(joinpath(@__DIR__, "../..") * "/examples/betareg/BetaModel.jl") # BetaReg stuff
@@ -28,15 +30,40 @@ p = length(covSel[1])
 q = length(covSel[2])
 β₀ = [0.0, 0, -0.05]
 γ₀ = [1]        # log precision intercept
-link = (LogitLink(), LogLink())
+#link = (LogitLink(), LogLink())
+logistic(x) = 1 / (1 + exp(-x))
+function invlink_cauchit(eta)
+    return 0.5 + atan(eta) / π
+end
+function robit_4(eta)
+    return 0.5 + 3/8 * (eta / sqrt(1 + (eta^2)/4)) * (1 - eta^2/(12*(1 + eta^2/4)))
+end
+function robit_2(eta)
+    return 0.5 + (eta / sqrt(1 + (eta^2)/2)) * (1/sqrt(8))
+end
+
+function robit_3(eta)
+    return 0.5 + (atan(eta/sqrt(3)) + (eta / (1 + (eta^2)/3)) * (1/sqrt(3))) / π
+end
+invlink = (x -> logistic(x), x -> exp(x))
 ρ = [0.7, 0.7];      # AR(1) coefficients for the covariate processes
 σₑ = [1, 10];        # Noise std for the AR(1) processes that generate the covariates
 mₑ = [0.0, 0.0];     # Mean for the AR(1) processes that generate the covariates
 
-y, X, β, γ, μtime, ψtime, αtime, βtime = simulate_beta_reg_data(T, nCov, covSel,
-    x -> linkinv(link[1], x), x -> linkinv(link[2], x), ρ, σₑ, mₑ, β₀, γ₀);
+#y, X, β, γ, μtime, ψtime, αtime, βtime = simulate_beta_reg_data(T, nCov, covSel,
+ #   x -> linkinv(link[1], x), x -> linkinv(link[2], x), ρ, σₑ, mₑ, β₀, γ₀);
 
+y, X, β, γ, μtime, ψtime, αtime, βtime = simulate_beta_reg_data(T, nCov, covSel,
+    invlink[1], invlink[2], ρ, σₑ, mₑ, β₀, γ₀);
+y = clamp.(y, 1e-16, 1 - 1e-16) # Ensure y is in (0, 1) for Beta regression
 ## Plot the true parameter paths and the time series
+invlink = (x -> robit_4(x), x -> exp(x))
+invlink = (x -> invlink_cauchit(x), x -> exp(x))
+invlink = (x -> robit_2(x), x -> exp(x))
+invlink = (x -> robit_3(x), x -> exp(x))
+
+
+
 
 # plot the parameter evolution path of the regression coefficients
 plt = plot_param_path_betareg(β, γ)
@@ -51,16 +78,18 @@ plot_betadensity_evolution(μtime, ψtime, y)
 m = mean(y[1:20])
 v = var(y[1:20])
 priorparam = [m, m * (1 - m) / v - 1] # Prior for y₀ ∼ BetaMean(priorparam[1], priorparam[2])
-f_μ(x) = priorparam[1] - linkinv(link[1], x)
+#f_μ(x) = priorparam[1] - linkinv(link[1], x)
+f_μ(x) = priorparam[1] - invlink[1](x)
 β_m0 = [find_zero(f_μ, 0.0); zeros(p - 1)]
 
-f_ϕ(x) = priorparam[2] - linkinv(link[2], x)
+#f_ϕ(x) = priorparam[2] - linkinv(link[2], x)
+f_ϕ(x) = priorparam[2] - invlink[2](x)
 β_ϕ0 = [find_zero(f_ϕ, 0.0); zeros(q - 1)]
 
 μ₀ = [β_m0; β_ϕ0]
 κ₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
-Σ₀ = :fisherinfo # Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
-
+#Σ₀ = :fisherinfo # Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
+Σ₀ = I(p+q)
 
 ## Set up the prior, model and algorithm settings
 
@@ -144,7 +173,7 @@ println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)%
 quant_paramtime_la = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 
 PlotPostParamEvolution!(plt, quant_paramtime_la, "Laplace",
-    groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=2, c=colors[3])
+    groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=2, c=colors[4])
 
 savefig(figFolder * "$(applName)_param_$(methodlabel)_$(algoSettings.scaling)_$(dataSettings.nPerGroup).svg")
 
