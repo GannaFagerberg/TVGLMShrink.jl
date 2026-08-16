@@ -40,7 +40,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     # Set up prior cov for t=0 state, with option to use Fisher info based prior
     if Σ₀ == :fisherinfo
         κ₀ = 1
-        Σ₀ = Hermitian((size(X, 2) / κ₀) * inv(FisherInfo(param, μ₀, 1)))
+        Σ₀ = Hermitian((size(X, 1) / κ₀) * inv(FisherInfo(param, μ₀, 1)))
         if verbose
             println("Prior at t=0 based on Fisher info with κ₀ = $κ₀")
             priorStd = sqrt.(diag(Σ₀))
@@ -67,13 +67,13 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
             algoSettingsCalibrate, progessbar=(status=progessbar.status, message="Calibrating scaling from Laplace with no scaling: "))
         if scaling == :fullfixed
             for t in 1:T
-                Svec[:, :, t] = sqrt(inv(Symmetric(groupSizes[t] * FisherInfo(param,
-                    median(θpost0[t, :, :]; dims=2), t) / Tobs)))
+                Svec[:, :, t] = sqrt(inv(Symmetric(groupSizes[t] * 
+                    FisherInfo(param, median(θpost0[t, :, :]; dims=2), t) / Tobs)))
             end
         else # :diagonal_fixed
             for t in 1:T
-                Svec[:, :, t] = Diagonal(diag(sqrt(inv(Symmetric(groupSizes[t] *
-                                                                 FisherInfo(param, median(θpost0[t, :, :]; dims=2), t) / Tobs)))))
+                Svec[:, :, t] = Diagonal(sqrt(inv(Symmetric(groupSizes[t] *
+                    FisherInfo(param, median(θpost0[t, :, :]; dims=2), t) / Tobs))))
             end
         end
     end
@@ -82,14 +82,14 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     ScaleMat =
         if scaling == :full
             (par, μ, t) -> sqrt(inv(Symmetric(groupSizes[t] * FisherInfo(par, μ, t) / Tobs)))
+        elseif scaling == :diagonal
+            (par, μ, t) -> Diagonal(sqrt(inv(Symmetric(groupSizes[t] * FisherInfo(par, μ, t) / Tobs))))
         elseif scaling == :fulllocal
             (par, μ, t) -> sqrt(pinv(Symmetric(FisherInfo(par, μ, t))))
         elseif scaling == :diaglocal
-            (par, μ, t) -> Diagonal(diag(sqrt(inv(Symmetric(FisherInfo(par, μ, t))))))
-        elseif scaling == :diagonal
-            (par, μ, t) -> Diagonal(diag(sqrt(inv(Symmetric(groupSizes[t] * FisherInfo(par, μ, t) / Tobs)))))
+            (par, μ, t) -> Diagonal(sqrt(pinv(Symmetric(FisherInfo(par, μ, t)))))
         elseif scaling == :diagonalfirst
-            (par, μ, t) -> Diagonal(diag(groupSizes[t] * FisherInfo(par, μ, t) / Tobs) .^ (-1 / 2))
+            (par, μ, t) -> Diagonal(groupSizes[t] * FisherInfo(par, μ, t) / Tobs) .^ (-1 / 2)
         elseif scaling == :fullfixed || scaling == :diagonalfixed
             (par, μ, t) -> Svec[:, :, t]
         elseif scaling == :none
