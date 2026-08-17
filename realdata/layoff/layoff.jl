@@ -60,8 +60,8 @@ g(x) = priorparam[2] - linkinv(link[2], x)
 m = find_zero(f, 0.0)
 s = find_zero(g, 0.0)
 μ₀ = [m; zeros(p - 1); s; zeros(q - 1)]
-κ₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
-Σ₀ = :fisherinfo # Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
+n₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
+Σ₀ = :fisherinfo # Σ₀ = (1 / n₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
 
 ## Set up the prior, model and algorithm settings
 
@@ -70,7 +70,7 @@ priorSettings = (
     ϕ₀=0.5, κ₀=0.3,             # Prior for ϕ ~ N(ϕ₀, κ₀²)
     m₀=-15.0, σ₀=3.0,           # Prior for μ ~ N(m₀, σ₀²)
     ν₀=3.0, ψ₀=1,               # Prior for σ²ₙ ~ scaled inverse χ²(ν₀, ψ₀)
-    μ₀=μ₀, Σ₀=Σ₀, # Prior for βₜ at time t=0
+    μ₀=μ₀, Σ₀=Σ₀, n₀ = n₀,      # Prior for βₜ at time t=0
 );
 
 modelSettings = (
@@ -98,6 +98,7 @@ algoSettings = (
     scaling=:full,            # Scaling of state innov, can be :full, :diagonal or :none
     FisherInfo=FisherInfoBeta,# Fisher info
     nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
+    fixed_scaling = true,     # Should the scaling matrix be fixed across Gibbs iter?
     verbose=true,             # Whether to print verbose output during sampling.
 );
 gr(legend=:topleft, grid=false, color=colors[2], lw=2, legendfontsize=12,
@@ -149,7 +150,7 @@ println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)%
 quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 
 PlotPostParamEvolution!(plt, quant_paramtime, methodlabel, groupSizes;
-    dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=1, c=colors[3])
+    dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=3, c=colors[3])
 plot(plt..., layout=(3, 1), size=(1000, 1200), margin=3mm)
 
 savefig(figFolder * "$(applName)_$(algoSettings.scaling)_$(dataSettings.nPerGroup)_dsp.svg")

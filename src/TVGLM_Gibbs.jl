@@ -8,9 +8,9 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
 
     # Unpack settings
     y, X, covSel, nPerGroup = dataSettings
-    ϕ₀, κ₀, m₀, σ₀, ν₀, ψ₀, μ₀, Σ₀ = priorSettings
+    ϕ₀, κ₀, m₀, σ₀, ν₀, ψ₀, μ₀, Σ₀, n₀ = priorSettings
     stateSamplingMethod, nParticles, nIter, nBurn, nMaxIter, nPrePGAS, offsetMethod,
-    h_upper, polyaoffset, scaling, FisherInfo, nCalibScale, verbose = algoSettings
+    h_upper, polyaoffset, scaling, FisherInfo, nCalibScale, fixed_scaling, verbose = algoSettings
     observation, link, condMean, condCov, innovModel, α, β, updateσₙ, nMixComp = modelSettings
 
     if verbose
@@ -18,9 +18,25 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     end
 
     nState = length(μ₀) # number of states
-    Tobs = length(y)
 
+    if isa(m₀, Number)
+        ϕ₀ = ϕ₀*ones(nState)
+        κ₀ = κ₀*ones(nState)
+        m₀ = m₀*ones(nState)
+        σ₀ = σ₀*ones(nState)
+        ν₀ = ν₀*ones(nState)
+        ψ₀ = ψ₀*ones(nState)
+        priorSettings = (
+            ϕ₀=ϕ₀, κ₀=κ₀,             
+            m₀=m₀, σ₀=σ₀,           
+            ν₀=ν₀, ψ₀=ψ₀,               
+            μ₀=μ₀, Σ₀=Σ₀, n₀=n₀,
+        );
+    end
+
+    
     # Setting up data as grouped data
+    Tobs = length(y)
     Y, Z, Xsel, groupSizes = splitEqualGroups(y, X, covSel, nPerGroup)
     T = length(Y)
     groupsize_common = ceil(Int, mean(groupSizes)) # Assuming common group size.
@@ -39,10 +55,9 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
 
     # Set up prior cov for t=0 state, with option to use Fisher info based prior
     if Σ₀ == :fisherinfo
-        κ₀ = 1
-        Σ₀ = Hermitian((size(X, 1) / κ₀) * inv(FisherInfo(param, μ₀, 1)))
+        Σ₀ = Hermitian((size(X, 1) / n₀) * inv(FisherInfo(param, μ₀, 1)))
         if verbose
-            println("Prior at t=0 based on Fisher info with κ₀ = $κ₀")
+            println("Prior at t=0 based on Fisher info with n₀ = $n₀")
             priorStd = sqrt.(diag(Σ₀))
             println("Prior 95% interval for the state at time t=0:")
             for j in 1:length(μ₀)
@@ -59,44 +74,55 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
         Svec_collect = zeros(0, 0, 0, 0) # Empty array if not collecting scaling matrices
     end
     Svec = zeros(nState, nState, T) # Storage for scaling matrices
-    if scaling == :fullfixed || scaling == :diagonalfixed
+    if scaling !== :none
         algoSettingsCalibrate = (; algoSettings..., scaling=:none,
             stateSamplingMethod=:ffbs_laplace, nIter=nCalibScale,
             nBurn=round(Int, 0.1 * nCalibScale), verbose=false)
         θpost0, _, _, _, _ = GibbsTVGLM(dataSettings, priorSettings, modelSettings,
             algoSettingsCalibrate, progessbar=(status=progessbar.status, message="Calibrating scaling from Laplace with no scaling: "))
-        if scaling == :fullfixed
-            for t in 1:T
+        for t in 1:T
+            θmedian_t = median(θpost0[t, :, :]; dims=2)
+            if scaling == :full
                 Svec[:, :, t] = sqrt(inv(Symmetric(groupSizes[t] * 
-                    FisherInfo(param, median(θpost0[t, :, :]; dims=2), t) / Tobs)))
-            end
-        else # :diagonal_fixed
-            for t in 1:T
-                Svec[:, :, t] = Diagonal(sqrt(inv(Symmetric(groupSizes[t] *
-                    FisherInfo(param, median(θpost0[t, :, :]; dims=2), t) / Tobs))))
+                    FisherInfo(param, θmedian_t, t) / Tobs)))
+            elseif scaling == :diag
+                Svec[:, :, t] = Diagonal(sqrt(inv(Symmetric(groupSizes[t] * 
+                    FisherInfo(param, θmedian_t, t) / Tobs)))) 
+            elseif scaling == :fulllocal 
+                Svec[:, :, t] = sqrt(pinv(Symmetric(FisherInfo(param, θmedian_t, t))))
+            elseif scaling == :diaglocal
+                Svec[:, :, t] = Diagonal(sqrt(pinv(Symmetric(FisherInfo(param, 
+                    θmedian_t, t)))))
+            else
+
             end
         end
+        # Scaling-adjusted prior on μ
+        scalingFactor_avg = diag(mean(Svec, dims = 3)[:,:,1])
+        m₀ = m₀ - 2*log.(scalingFactor_avg)
+        priorSettings = (; priorSettings..., m₀ = m₀);
+        #println("Average scaling matrix:")
+        #println(mean(Svec, dims = 3)[:,:,1])
+        println("Adjusted m₀ = $(m₀)")
     end
 
     # Define the scaling matrix
     ScaleMat =
-        if scaling == :full
+        if fixed_scaling
+            (par, μ, t) -> Svec[:, :, t]
+        elseif scaling == :full
             (par, μ, t) -> sqrt(inv(Symmetric(groupSizes[t] * FisherInfo(par, μ, t) / Tobs)))
-        elseif scaling == :diagonal
+        elseif scaling == :diag
             (par, μ, t) -> Diagonal(sqrt(inv(Symmetric(groupSizes[t] * FisherInfo(par, μ, t) / Tobs))))
         elseif scaling == :fulllocal
             (par, μ, t) -> sqrt(pinv(Symmetric(FisherInfo(par, μ, t))))
         elseif scaling == :diaglocal
             (par, μ, t) -> Diagonal(sqrt(pinv(Symmetric(FisherInfo(par, μ, t)))))
-        elseif scaling == :diagonalfirst
-            (par, μ, t) -> Diagonal(groupSizes[t] * FisherInfo(par, μ, t) / Tobs) .^ (-1 / 2)
-        elseif scaling == :fullfixed || scaling == :diagonalfixed
-            (par, μ, t) -> Svec[:, :, t]
         elseif scaling == :none
             (par, μ, t) -> I(nState)
         else
-            error("Invalid scaling option. Choose :full, :fullfixed, :diagonal,     
-                :diagonalfixed or :none.")
+            error("Invalid scaling option. Choose :full, :diag,     
+                :fulllocal, diaglocal or :none.")
         end
 
     ## Approximate the log χ²₁ distribution with a mixture of normals
@@ -104,10 +130,10 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
 
     ## Initial values          
     S = zeros(Int8, T, nState)    # Mixture allocation for logχ²₁ - this is updated first
-    μ = fill(m₀, nState)
-    σ²ₙ = fill(ψ₀, nState)
-    ϕ = fill(ϕ₀, nState)
-    H = fill(m₀, T, nState)
+    μ = m₀
+    σ²ₙ = ψ₀
+    ϕ = ϕ₀
+    H = repeat(m₀', T)
     H̃ = H .- μ'
     ξ = ones(T, nState)
     θ = zeros(T + 1, nState) # Regression coefficients evolution
