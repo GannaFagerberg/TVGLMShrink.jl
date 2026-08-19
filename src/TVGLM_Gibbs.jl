@@ -193,7 +193,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
             H = median(Hpost0; dims=3)
             ϕ = median(ϕpost0; dims=2)
             μ = median(μpost0; dims=2)
-            updateσₙ ? σ²ₙ = median(σ²ₙpost0; dims=2) : σ²ₙ = fill(ψ₀, nState)
+            updateσₙ ? σ²ₙ = median(σ²ₙpost0; dims=2) : σ²ₙ = ψ₀#fill(ψ₀, nState)
         else
             initialization = prior
             θ = PGASsimulate!(θparticles, Y, nState, nParticles, param,
@@ -233,6 +233,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
             for t in 1:T
                 Svec[:, :, t] = ScaleMat(param, θ[t, :], t)
             end
+
         elseif stateSamplingMethod == :montecarlo
             if scaling === :none
                 FFBS_montecarlo!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param;
@@ -246,6 +247,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
 
         ## Update the log-volatility evolution
         ν = diff(θ; dims=1)
+
         if scaling !== :none
             for t in 1:T
                 if i == 1 && det(Svec[:, :, t]) == 0
