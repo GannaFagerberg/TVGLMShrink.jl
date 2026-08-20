@@ -5,6 +5,8 @@ using PDMats, LogExpFunctions
 using SMCsamplers, DynamicGlobalLocalShrinkage
 using Utils: quantile_multidim
 using Utils: mvcolors as colors 
+using JLD2
+
 include("DistModel.jl")
 # Scatter plot the state against the observations so see how linear it is
 nSim = 1000
@@ -38,6 +40,7 @@ x = [1]
 β = [1.0]
 τ = 1.0
 μ = β
+p=1
 Σ = τ^2*I(p)
 stateDraws = rand(MvNormal(μ,Σ), nSim)
 obsDrawsExp = zeros(nSim)
@@ -58,22 +61,34 @@ nSim = 10000
 invlinkmean(x) = LogExpFunctions.logistic(x) # Inverse link function for Beta regression
 invlinkprec(x) = exp(x) # Inverse link function for Beta regressionp = 1
 x = [1]
-β = [1.0]
-τ = 1.0
-μ = β
-Σ = τ^2*I(p)
-stateDraws = rand(MvNormal(μ,Σ), nSim)
-nStates = size(stateDraws,1)
-obsDrawsBeta = zeros(nSim)
-for i in 1:nSim
-    mean = 0.5#invlinkmean(x ⋅ stateDraws[:,i])
-    precision = invlinkprec(x ⋅ stateDraws[:,i])
-    obsDrawsBeta[i] = rand(Beta(mean*precision, (1-mean)*precision))
-end
+β = [1.0, 1.0, -1.0]
+τ = [0.1, 1, 2]
+BetaPlt = []
+p=1
+for i in 1:3
+    μ = [β[i]]
+    Σ = (τ[i]^2)*I(p)
+    stateDraws = rand(MvNormal(μ,Σ), nSim)
+    nStates = size(stateDraws,1)
+    obsDrawsBeta = zeros(nSim)
+    for i in 1:nSim
+        mean = 0.5#invlinkmean(x ⋅ stateDraws[:,i])
+        precision = invlinkprec(x ⋅ stateDraws[:,i])
+        obsDrawsBeta[i] = rand(Beta(mean*precision, (1-mean)*precision))
+    end
+    push!(BetaPlt, (
+                obsDrawsBeta=obsDrawsBeta,
+                stateDraws=stateDraws)
+                    )
+
+
+end 
+plot(BetaPlt[3].obsDrawsBeta)
 pltBeta = []
+method = 3
 for j in 1:nStates
-    correlation = round(cor(stateDraws[j,:], obsDrawsBeta), digits = 3)
-    push!(pltBeta, scatter(stateDraws[j,:], obsDrawsBeta, color = colors[j], label = "",
+    correlation = round(cor(BetaPlt[method].stateDraws[j,:], BetaPlt[method].obsDrawsBeta), digits = 3)
+    push!(pltBeta, scatter(BetaPlt[method].stateDraws[j,:], BetaPlt[method].obsDrawsBeta, color = colors[j], label = "",
         title = L"\mathrm{Corr}(\beta_{%$(j-1)}, y) = %$(correlation)", xlabel = "State $j",
         ylabel = "Observations", markersize = 5, markerstrokecolor = :black, markerstrokewidth = 0))
 end
@@ -100,6 +115,7 @@ algoSettings = (
     scaling=:none,            # Scaling of state innov, can be :full, :diagonal or :none
     FisherInfo=FisherInfo_none, # Fisher info
     nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
+    fixed_scaling = false,     # Should the scaling matrix be fixed across Gibbs iter?
     verbose=true,             # Whether to print verbose output during sampling.
 );
 gr(legend=:topleft, grid=false, color=colors[2], lw=2, legendfontsize=12,
@@ -121,7 +137,7 @@ priorSettings = (
     ϕ₀=0.5, κ₀=0.3,             # Prior for ϕ ~ N(ϕ₀, κ₀²)
     m₀=-15.0, σ₀=3.0,           # Prior for μ ~ N(m₀, σ₀²)
     ν₀=3.0, ψ₀=1,               # Prior for σ²ₙ ~ scaled inverse χ²(ν₀, ψ₀)
-    μ₀=zeros(p+q), Σ₀=I(p+q), # Prior for βₜ at time t=0
+    μ₀=zeros(p+q), Σ₀=I(p+q),n₀ = 1,  # Prior for βₜ at time t=0
 );
 
 # Poisson regression
@@ -155,6 +171,34 @@ println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)%
 quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);     
 
 plt = plot_param_path_poisreg(β)
+PlotPostParamEvolution!(plt, quant_paramtime, methodlabel, groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
+
+
+push!(results, (
+                name="$methodlabel $(dist), nPerGroup $(nPerGroup)",
+                quant_paramtime=quant_paramtime,
+                priorSettings=priorSettings,
+                modelSettings=modelSettings,
+                algoSettings=algoSettings,
+                groupSizes=groupSizes,
+                nFailure=nFailure[])
+                    )
+
+
+algoSettings = (; algoSettings..., stateSamplingMethod=:ffbs_laplace);
+methodlabel = "Laplace"
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
+    priorSettings, modelSettings, algoSettings);
+
+prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
+println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
+    of the simulated trajectories")
+
+# Parameter quantiles on the parameter time scale - this always includes t=0
+quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);     
+
+plt = plot_param_path_poisreg(β)
 titles = vcat([L"\beta_{%$(j-1)}" for j in 1:p])
 PlotPostParamEvolution!(plt, quant_paramtime, methodlabel, groupSizes;
    interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
@@ -168,7 +212,6 @@ push!(results, (
                 groupSizes=groupSizes,
                 nFailure=nFailure[])
                     )
-
 
 # Exponential regression
 dist = "Exponential"
@@ -191,7 +234,35 @@ modelSettings = (
     updateσₙ=false, # Update σ²ₙ in the Gibbs sampler, or set σₙ = 1
     nMixComp=10,    # nComp in mixture approximation of log χ²₁. Only 5 or 10 supported.
 );
+algoSettings = (; algoSettings..., stateSamplingMethod=:ffbs_slr);
+methodlabel = "IPLF"
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
+    priorSettings, modelSettings, algoSettings);
 
+prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
+println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
+    of the simulated trajectories")
+
+# Parameter quantiles on the parameter time scale - this always includes t=0
+quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);     
+
+plt = plot_param_path_poisreg(β)
+titles = vcat([L"\beta_{%$(j-1)}" for j in 1:p])
+PlotPostParamEvolution!(plt, quant_paramtime, methodlabel, groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
+push!(results, (
+                name="$methodlabel $(dist), nPerGroup $(nPerGroup)",
+                quant_paramtime=quant_paramtime,
+                priorSettings=priorSettings,
+                modelSettings=modelSettings,
+                algoSettings=algoSettings,
+                groupSizes=groupSizes,
+                nFailure=nFailure[])
+                    )
+
+
+algoSettings = (; algoSettings..., stateSamplingMethod=:ffbs_laplace);
+methodlabel = "Laplace"
 θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
     priorSettings, modelSettings, algoSettings);
 
@@ -218,7 +289,6 @@ push!(results, (
                     )
 
 
-
 ######## IPLF fails for Negative Binomial regression
 dist = "Negative Binomial"
 
@@ -232,7 +302,7 @@ priorSettings = (
     ϕ₀=0.5, κ₀=0.3,             # Prior for ϕ ~ N(ϕ₀, κ₀²)
     m₀=-15.0, σ₀=3.0,           # Prior for μ ~ N(m₀, σ₀²)
     ν₀=3.0, ψ₀=1,               # Prior for σ²ₙ ~ scaled inverse χ²(ν₀, ψ₀)
-    μ₀=zeros(p+q), Σ₀=I(p+q), # Prior for βₜ at time t=0
+    μ₀=zeros(p+q), Σ₀=I(p+q),n₀ = 1, # Prior for βₜ at time t=0
 );
 
 
@@ -265,7 +335,8 @@ modelSettings = (
     updateσₙ=false, # Update σ²ₙ in the Gibbs sampler, or set σₙ = 1
     nMixComp=10,    # nComp in mixture approximation of log χ²₁. Only 5 or 10 supported.
 );
-
+algoSettings = (; algoSettings..., stateSamplingMethod=:ffbs_slr);
+methodlabel = "IPLF"
 θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
     priorSettings, modelSettings, algoSettings);
 
@@ -276,7 +347,7 @@ println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)%
 # Parameter quantiles on the parameter time scale - this always includes t=0
 quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);     
 
-plt = plot_param_path_betareg(β,γ)
+plt = plot_param_path_betareg(β1,γ1)
 titles = vcat([L"\beta_{%$(j-1)}" for j in 1:p])
 PlotPostParamEvolution!(plt, quant_paramtime, methodlabel, groupSizes;
    interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
@@ -290,7 +361,33 @@ push!(results, (
                 groupSizes=groupSizes,
                 nFailure=nFailure[])
                     )
+dataSettings = (y=NegbinomData[:,1], X=NegbinomData[:,2:3], covSel=covSel, nPerGroup=5);
+algoSettings = (; algoSettings..., stateSamplingMethod=:ffbs_laplace);
+methodlabel = "Laplace"
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
+    priorSettings, modelSettings, algoSettings);
 
+prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
+println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
+    of the simulated trajectories")
+
+# Parameter quantiles on the parameter time scale - this always includes t=0
+quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);     
+
+plt = plot_param_path_betareg(β1,γ1)
+titles = vcat([L"\beta_{%$(j-1)}" for j in 1:p])
+PlotPostParamEvolution!(plt, quant_paramtime, methodlabel, groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=3, c=colors[3])
+
+push!(results, (
+                name="$methodlabel $(dist), nPerGroup $(nPerGroup)",
+                quant_paramtime=quant_paramtime,
+                priorSettings=priorSettings,
+                modelSettings=modelSettings,
+                algoSettings=algoSettings,
+                groupSizes=groupSizes,
+                nFailure=nFailure[])
+                    )
 
 # Beta regression
 dist = "Beta"
@@ -314,7 +411,6 @@ function condCov(param, state, t)
     end
     return diagm(μ .* (1 .- μ) ./ (1 .+ ψ))
 end
-
 modelSettings = (
     observation=observation,
     link=link, # link functions for mean and precision
@@ -326,7 +422,8 @@ modelSettings = (
     updateσₙ=false, # Update σ²ₙ in the Gibbs sampler, or set σₙ = 1
     nMixComp=10,    # nComp in mixture approximation of log χ²₁. Only 5 or 10 supported.
 );
-
+algoSettings = (; algoSettings..., stateSamplingMethod=:ffbs_slr);
+methodlabel = "IPLF"
 θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
     priorSettings, modelSettings, algoSettings);
 
@@ -352,11 +449,57 @@ push!(results, (
                     )
 
 
+algoSettings = (; algoSettings..., stateSamplingMethod=:ffbs_laplace);
+methodlabel = "Laplace"
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
+    priorSettings, modelSettings, algoSettings);
 
+prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
+println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
+    of the simulated trajectories")
+
+# Parameter quantiles on the parameter time scale - this always includes t=0
+quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);     
+
+plt = plot_param_path_betareg(β, γ)
+titles = vcat([L"\beta_{%$(j-1)}" for j in 1:p])
+PlotPostParamEvolution!(plt, quant_paramtime, methodlabel, groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
+
+push!(results, (
+                name="$methodlabel $(dist), nPerGroup $(nPerGroup)",
+                quant_paramtime=quant_paramtime,
+                priorSettings=priorSettings,
+                modelSettings=modelSettings,
+                algoSettings=algoSettings,
+                groupSizes=groupSizes,
+                nFailure=nFailure[])
+                    )
+
+
+save_path = "/Users/niuyijie/Dropbox/TV_GLM_DSP/ClusterOUT/PoisSim/IPLF_Fail(none).jld2"
+@save save_path results
 
 plt = plot_param_path_poisreg(β)
 titles = vcat([L"\beta_{%$(j-1)}" for j in 1:p])
 PlotPostParamEvolution!(plt, results[1].quant_paramtime, methodlabel, groupSizes;
    interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
 PlotPostParamEvolution!(plt, results[2].quant_paramtime, methodlabel, groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
+PlotPostParamEvolution!(plt, results[3].quant_paramtime, methodlabel, groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
+PlotPostParamEvolution!(plt, results[4].quant_paramtime, methodlabel, groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
+
+plt = plot_param_path_betareg(β1, γ1)
+PlotPostParamEvolution!(plt, results[5].quant_paramtime, methodlabel, groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
+PlotPostParamEvolution!(plt, results[6].quant_paramtime, methodlabel, groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
+
+plt = plot_param_path_betareg(β, γ)
+
+PlotPostParamEvolution!(plt, results[7].quant_paramtime, methodlabel, groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
+PlotPostParamEvolution!(plt, results[8].quant_paramtime, methodlabel, groupSizes;
    interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
