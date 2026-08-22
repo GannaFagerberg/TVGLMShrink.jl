@@ -92,8 +92,8 @@ for j in 1:nStates
         title = L"\mathrm{Corr}(\beta_{%$(j-1)}, y) = %$(correlation)", xlabel = "State $j",
         ylabel = "Observations", markersize = 5, markerstrokecolor = :black, markerstrokewidth = 0))
 end
-plot(pltBeta..., layout = (2,2), size = (1000, 800))        
-
+betap = plot(pltBeta..., layout = (1,3), size = (1000, 800))        
+savefig(betap, "/Users/niuyijie/Dropbox/TV_GLM_DSP/ClusterOUT/PoisSim/IPLF_Fail(corr).pdf")
 
 
 
@@ -479,27 +479,47 @@ push!(results, (
 
 save_path = "/Users/niuyijie/Dropbox/TV_GLM_DSP/ClusterOUT/PoisSim/IPLF_Fail(none).jld2"
 @save save_path results
+using JLD2
+results = load(save_path)["results"]
 
+methodvec = ["IPLF", "Laplace"]
 plt = plot_param_path_poisreg(β)
-titles = vcat([L"\beta_{%$(j-1)}" for j in 1:p])
-PlotPostParamEvolution!(plt, results[1].quant_paramtime, methodlabel, groupSizes;
-   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
-PlotPostParamEvolution!(plt, results[2].quant_paramtime, methodlabel, groupSizes;
-   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
-PlotPostParamEvolution!(plt, results[3].quant_paramtime, methodlabel, groupSizes;
-   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
-PlotPostParamEvolution!(plt, results[4].quant_paramtime, methodlabel, groupSizes;
-   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
+#titles = vcat([L"\beta_{%$(j-1)}" for j in 1:p])
+PlotPostParamEvolution!(plt, results[1].quant_paramtime, methodvec[1], groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=3, c=colors[3])
+PlotPostParamEvolution!(plt, results[2].quant_paramtime, methodvec[2], groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=3, c=colors[4])
+plot!(plt[1], legend=:topright)
 
-plt = plot_param_path_betareg(β1, γ1)
-PlotPostParamEvolution!(plt, results[5].quant_paramtime, methodlabel, groupSizes;
-   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
-PlotPostParamEvolution!(plt, results[6].quant_paramtime, methodlabel, groupSizes;
-   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
+pltexp = plot_param_path_poisreg(β)
+PlotPostParamEvolution!(pltexp , results[3].quant_paramtime, methodvec[1], groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=3, c=colors[3])
+PlotPostParamEvolution!(pltexp , results[4].quant_paramtime, methodvec[2], groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=3, c=colors[4])
+plot!(pltexp[1], legend=:topright)
 
-plt = plot_param_path_betareg(β, γ)
+pltwork = plot(plt, pltexp, layout=(1, 2), size = (1200, 800))
 
-PlotPostParamEvolution!(plt, results[7].quant_paramtime, methodlabel, groupSizes;
-   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
-PlotPostParamEvolution!(plt, results[8].quant_paramtime, methodlabel, groupSizes;
-   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
+pltneg1 = plot_param_path_betareg(β1, γ1)
+PlotPostParamEvolution!(pltneg1, results[5].quant_paramtime, methodvec[1], groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=3, c=colors[3])
+plot!(pltneg1[1], legend=:topright)
+
+pltneg2 = plot_param_path_betareg(β1, γ1)
+PlotPostParamEvolution!(pltneg2, results[6].quant_paramtime, methodlabel, groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=3, c=colors[4])
+plot!(pltneg2[1], legend=:topright)
+
+pltbeta1 = plot_param_path_betareg(β, γ)
+PlotPostParamEvolution!(pltbeta1, results[7].quant_paramtime, methodvec[1], groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=3, c=colors[3])
+plot!(pltbeta1[1], legend=:topright)
+
+pltbeta2 = plot_param_path_betareg(β1, γ1)
+PlotPostParamEvolution!(pltbeta2, results[6].quant_paramtime, methodlabel, groupSizes;
+   interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=3, c=colors[4])
+plot!(pltbeta2[1], legend=:topright)
+
+pltfail = plot(pltneg1, pltneg2, pltbeta1,pltbeta2,layout=(2, 2), size = (2400, 2000))
+savefig(pltwork, "/Users/niuyijie/Dropbox/TV_GLM_DSP/ClusterOUT/PoisSim/IPLF_Fail(work).pdf")
+savefig(pltfail, "/Users/niuyijie/Dropbox/TV_GLM_DSP/ClusterOUT/PoisSim/IPLF_Fail(fail).pdf")
