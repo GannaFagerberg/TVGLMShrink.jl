@@ -105,7 +105,7 @@ function plot_param_path_poisreg(β)
     plt = []
     for j = 1:p
         push!(plt, plot(β[:, j], label="true", xlabel="time, " * L"t",
-            ylabel="", title=L"\beta_{%$(j-1)}", color=:black, lw=2))
+            ylabel="", title=L"\beta_{%$(j-1)}", color=:black, lw=3))
     end
     plt = plot(plt..., layout=(2, 1), size=(1200, 1000), xguidefontsize=12,
         yguidefontsize=14, titlefontsize=20,
@@ -119,11 +119,11 @@ function plot_param_path_betareg(β, γ)
     plt = []
     for j = 1:p
         push!(plt, plot(β[:, j], label="true", xlabel="time, " * L"t",
-            ylabel="", title=L"\beta_{%$(j-1)}", color=:black, lw=2))
+            ylabel="", title=L"\beta_{%$(j-1)}", color=:black, lw=3))
     end
     for j = 1:q
         push!(plt, plot(γ[:, j], label="true", xlabel="time, " * L"t",
-            ylabel="", title=L"\gamma_{%$(j-1)}", color=:black, lw=2))
+            ylabel="", title=L"\gamma_{%$(j-1)}", color=:black, lw=3))
     end
     plt = plot(plt..., layout=(3, 1), size=(1200, 1000), xguidefontsize=12,
         yguidefontsize=14, titlefontsize=20,
