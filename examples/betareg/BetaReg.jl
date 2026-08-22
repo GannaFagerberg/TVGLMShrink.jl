@@ -32,19 +32,6 @@ q = length(covSel[2])
 γ₀ = [1]        # log precision intercept
 #link = (LogitLink(), LogLink())
 logistic(x) = 1 / (1 + exp(-x))
-function invlink_cauchit(eta)
-    return 0.5 + atan(eta) / π
-end
-function robit_4(eta)
-    return 0.5 + 3/8 * (eta / sqrt(1 + (eta^2)/4)) * (1 - eta^2/(12*(1 + eta^2/4)))
-end
-function robit_2(eta)
-    return 0.5 + (eta / sqrt(1 + (eta^2)/2)) * (1/sqrt(8))
-end
-
-function robit_3(eta)
-    return 0.5 + (atan(eta/sqrt(3)) + (eta / (1 + (eta^2)/3)) * (1/sqrt(3))) / π
-end
 invlink = (x -> logistic(x), x -> exp(x))
 ρ = [0.7, 0.7];      # AR(1) coefficients for the covariate processes
 σₑ = [1, 10];        # Noise std for the AR(1) processes that generate the covariates
@@ -57,13 +44,6 @@ y, X, β, γ, μtime, ψtime, αtime, βtime = simulate_beta_reg_data(T, nCov, c
     invlink[1], invlink[2], ρ, σₑ, mₑ, β₀, γ₀);
 y = clamp.(y, 1e-16, 1 - 1e-16) # Ensure y is in (0, 1) for Beta regression
 ## Plot the true parameter paths and the time series
-invlink = (x -> robit_4(x), x -> exp(x))
-invlink = (x -> invlink_cauchit(x), x -> exp(x))
-invlink = (x -> robit_2(x), x -> exp(x))
-invlink = (x -> robit_3(x), x -> exp(x))
-
-
-
 
 # plot the parameter evolution path of the regression coefficients
 plt = plot_param_path_betareg(β, γ)
@@ -88,8 +68,8 @@ f_ϕ(x) = priorparam[2] - invlink[2](x)
 
 μ₀ = [β_m0; β_ϕ0]
 κ₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
-#Σ₀ = :fisherinfo # Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
-Σ₀ = I(p+q)
+Σ₀ = :fisherinfo # Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
+link = (LogitLink(), LogLinLink())
 
 ## Set up the prior, model and algorithm settings
 
@@ -98,7 +78,7 @@ priorSettings = (
     ϕ₀=0.5, κ₀=0.3,             # Prior for ϕ ~ N(ϕ₀, κ₀²)
     m₀=-15.0, σ₀=3.0,           # Prior for μ ~ N(m₀, σ₀²)
     ν₀=3.0, ψ₀=1,               # Prior for σ²ₙ ~ scaled inverse χ²(ν₀, ψ₀)
-    μ₀=μ₀, Σ₀=Σ₀, # Prior for βₜ at time t=0
+    μ₀=μ₀, Σ₀=Σ₀,n₀ = 1, # Prior for βₜ at time t=0
 );
 
 modelSettings = (
@@ -123,9 +103,10 @@ algoSettings = (
     offsetMethod=eps(),       # Offset for log-volatility
     h_upper=Inf,              # Upper bound for log-volatility
     polyaoffset=0.0,          # Offset for Polya-Gamma variables in the update of h_t
-    scaling=:full,            # Scaling of state innov, can be :full, :diagonal or :none
+    scaling=:none,            # Scaling of state innov, can be :full, :diagonal or :none
     FisherInfo=FisherInfoBeta,# Fisher info
     nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
+    fixed_scaling = false,     # Should the scaling matrix be fixed across Gibbs iter?
     verbose=true,             # Whether to print verbose output during sampling.
 );
 
