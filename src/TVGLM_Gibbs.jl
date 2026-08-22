@@ -79,7 +79,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
             stateSamplingMethod=:ffbs_laplace, nIter=nCalibScale,
             nBurn=round(Int, 0.1 * nCalibScale), verbose=false)
         θpost0, _, _, _, _ = GibbsTVGLM(dataSettings, priorSettings, modelSettings,
-            algoSettingsCalibrate, progessbar=(status=progessbar.status, message="Calibrating scaling from Laplace with no scaling: "))
+            algoSettingsCalibrate, progessbar=(status=progessbar.status, message="Calibrating scaling matrix: "))
         for t in 1:T
             θmedian_t = median(θpost0[t, :, :]; dims=2)
             if scaling == :full
@@ -109,17 +109,17 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     # Define the scaling matrix
     ScaleMat =
         if fixed_scaling
-            (par, μ, t) -> Svec[:, :, t]
+            (par, state, t) -> Svec[:, :, t]
         elseif scaling == :full
-            (par, μ, t) -> sqrt(inv(Symmetric(groupSizes[t] * FisherInfo(par, μ, t) / Tobs)))
+            (par, state, t) -> sqrt(inv(Symmetric(groupSizes[t] * FisherInfo(par, state, t) / Tobs)))
         elseif scaling == :diag
-            (par, μ, t) -> Diagonal(sqrt(inv(Symmetric(groupSizes[t] * FisherInfo(par, μ, t) / Tobs))))
+            (par, state, t) -> Diagonal(sqrt(inv(Symmetric(groupSizes[t] * FisherInfo(par, state, t) / Tobs))))
         elseif scaling == :fulllocal
-            (par, μ, t) -> sqrt(pinv(Symmetric(FisherInfo(par, μ, t))))
+            (par, state, t) -> sqrt(pinv(Symmetric(FisherInfo(par, state, t))))
         elseif scaling == :diaglocal
-            (par, μ, t) -> Diagonal(sqrt(pinv(Symmetric(FisherInfo(par, μ, t)))))
+            (par, state, t) -> Diagonal(sqrt(pinv(Symmetric(FisherInfo(par, state, t)))))
         elseif scaling == :none
-            (par, μ, t) -> I(nState)
+            (par, state, t) -> I(nState)
         else
             error("Invalid scaling option. Choose :full, :diag,     
                 :fulllocal, diaglocal or :none.")
@@ -130,10 +130,10 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
 
     ## Initial values          
     S = zeros(Int8, T, nState)    # Mixture allocation for logχ²₁ - this is updated first
-    μ = m₀
-    σ²ₙ = ψ₀
-    ϕ = ϕ₀
-    H = repeat(m₀', T)
+    μ = copy(m₀)
+    σ²ₙ = copy(ψ₀)
+    ϕ = copy(ϕ₀)
+    H = repeat(μ', T)
     H̃ = H .- μ'
     ξ = ones(T, nState)
     θ = zeros(T + 1, nState) # Regression coefficients evolution
