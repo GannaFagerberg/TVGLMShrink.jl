@@ -4,14 +4,15 @@ using Distributions, LinearAlgebra, ProgressMeter, BandedMatrices, Plots, LaTeXS
 using PDMats, LogExpFunctions
 using SMCsamplers, DynamicGlobalLocalShrinkage, Utils
 using GLM: Link
-import GLM: linkfun, linkinv, mueta
+#import GLM: linkfun, linkinv, mueta
 export linkfun, linkinv, mueta
 using SpecialFunctions: digamma, trigamma
 using Roots: find_zero
 
-
+include("TEST.jl")
 include("TVGLM_Gibbs.jl")
-export GibbsTVGLM
+
+export FFBS_SLR_test!, GibbsTVGLM
 
 include("TVGLMPlots.jl")
 export PlotPostParamEvolution, PlotPostParamEvolution!, postPredCheckDistr

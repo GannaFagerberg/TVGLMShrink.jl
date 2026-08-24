@@ -14,8 +14,10 @@ observation(param, state, t) =
             linkinv.(param.link[2], param.Z[2][t] * state[param.Zidx[2]])
         )
     )
+    
 @views condMean(param, state, t) = linkinv.(param.link[1],
     param.Z[1][t] * state[param.Zidx[1]])
+
 function condCov(param, state, t)
     @views begin
         μ = linkinv.(param.link[1], param.Z[1][t] * state[param.Zidx[1]])
