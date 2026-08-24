@@ -153,8 +153,8 @@ println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)%
 # Parameter quantiles on the parameter time scale - this always includes t=0
 quant_paramtime_la = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 
-PlotPostParamEvolution!(plt_iplf, quant_paramtime_la, "Laplace",
-    groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=2, c=colors[6])
+PlotPostParamEvolution!(plt, quant_paramtime_la, "Laplace",
+    groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=2, c=colors[4])
 
 savefig(figFolder * "$(applName)_param_$(methodlabel)_$(algoSettings.scaling)_$(dataSettings.nPerGroup).svg")
 

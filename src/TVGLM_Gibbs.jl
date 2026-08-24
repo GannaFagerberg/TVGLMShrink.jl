@@ -38,22 +38,6 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     # Setting up data as grouped data
     Tobs = length(y)
     Y, Z, Xsel, groupSizes = splitEqualGroups(y, X, covSel, nPerGroup)
-
-    Y_sufficient = [
-        beta_sufficient_observation_grouped(Y[t])
-        for t in eachindex(Y)
-    ]
-
-    #sufficient_condMean, sufficient_condCov =
-    sufficient_condMoments =
-    make_beta_sufficient_statistics_adapters_grouped(
-        condMean,
-        condCov;
-        variance_denominator_offset=1.0,
-        mean_boundary=1e-12,
-        min_concentration=1e-10
-    )
-
     T = length(Y)
     groupsize_common = ceil(Int, mean(groupSizes)) # Assuming common group size.
 
@@ -66,7 +50,8 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     end
 
     # Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
-    param = TVGLMmodel(LogVol2Covs(zeros(length(groupSizes), nState)), Z, Xsel, link, Zidx)
+    param = TVGLMmodel(LogVol2Covs(zeros(length(groupSizes), nState)), Z, Xsel, link,
+        Zidx)
 
     # Set up prior cov for t=0 state, with option to use Fisher info based prior
     if Σ₀ == :fisherinfo
@@ -235,8 +220,8 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
             end
         elseif stateSamplingMethod == :ffbs_slr
             if scaling === :none
-                #FFBS_SLR_test!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,nMaxIter; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
-                FFBS_SLR_test!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
+                FFBS_SLR!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,
+                    nMaxIter; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
             else
                 FFBS_SLR!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,
                     nMaxIter, ScaleMat, Svec; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
