@@ -50,8 +50,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     end
 
     # Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
-    param = TVGLMmodel(LogVol2Covs(zeros(length(groupSizes), nState)), Z, Xsel, link,
-        Zidx)
+    param = TVGLMmodel(LogVol2Covs(zeros(length(groupSizes), nState)), Z, Xsel, link, Zidx)
 
     # Set up prior cov for t=0 state, with option to use Fisher info based prior
     if Σ₀ == :fisherinfo
@@ -78,6 +77,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
         algoSettingsCalibrate = (; algoSettings..., scaling=:none,
             stateSamplingMethod=:ffbs_laplace, nIter=nCalibScale,
             nBurn=round(Int, 0.1 * nCalibScale), verbose=false)
+
         θpost0, _, _, _, _ = GibbsTVGLM(dataSettings, priorSettings, modelSettings,
             algoSettingsCalibrate, progessbar=(status=progessbar.status, message="Calibrating scaling matrix: "))
         for t in 1:T
@@ -203,6 +203,58 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
 
     nFailure = Ref(0)
 
+    ### For IPLF
+
+    if stateSamplingMethod == :ffbs_slr
+        suffstat_mode = all(cs -> cs == [1], covSel) ? :summed : :stacked
+        #suffstat_mode = :stacked
+
+        if suffstat_mode == :summed
+            nObs = 2
+        else
+            nObs = 2*nPerGroup
+        end
+        
+        ws = TVGLMShrink.IPLFWorkspace(Float64,nState,nObs)
+
+        if suffstat_mode == :summed
+
+            Y_sufficient = [
+                #beta_sufficient_observation_summed(Y[t])
+                beta_sufficient_observation_averaged(Y[t])
+                for t in eachindex(Y)
+            ]
+
+            sufficient_condMoments =
+                #make_beta_sufficient_statistics_adapters_summed(
+                make_beta_sufficient_statistics_adapters_averaged(
+                        condMean,
+                        condCov;
+                        variance_denominator_offset=1.0,
+                        mean_boundary=1e-12,
+                        min_concentration=1e-10
+                )
+
+        else
+
+            Y_sufficient = [
+                beta_sufficient_observation_grouped(Y[t])
+                for t in eachindex(Y)
+            ]
+
+            sufficient_condMoments =
+                make_beta_sufficient_statistics_adapters_grouped(
+                        condMean,
+                        condCov;
+                        variance_denominator_offset=1.0,
+                        mean_boundary=1e-12,
+                        min_concentration=1e-10
+                    )
+
+        end
+    end
+
+    ### Begin the LOOP
     if haskey(ENV, "SLURM_JOB_ID")
         progessbar = (; progessbar..., status=false)
     end
@@ -215,16 +267,15 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
             if scaling === :none
                 FFBS_laplace!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param; max_iter=nMaxIter, nFailure=nFailure)
             else
-                FFBS_laplace!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param,
-                    ScaleMat, Svec; max_iter=nMaxIter, nFailure=nFailure)
+                FFBS_laplace!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param, ScaleMat, Svec; max_iter=nMaxIter, nFailure=nFailure)
             end
         elseif stateSamplingMethod == :ffbs_slr
             if scaling === :none
-                FFBS_SLR!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,
-                    nMaxIter; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
+                #FFBS_SLR_test!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,nMaxIter; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
+                FFBS_SLR_test!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
+                #FFBS_SLR_test!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=0.001, β=2, κ=0, sample_t0=true, nFailure=nFailure)
             else
-                FFBS_SLR!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,
-                    nMaxIter, ScaleMat, Svec; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
+                FFBS_SLR!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀, nMaxIter, ScaleMat, Svec; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
             end
         elseif stateSamplingMethod == :pgas
             θ = PGASsimulate!(θparticles, Y, nState, nParticles, param,
@@ -263,8 +314,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
                 update_dsp!(ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings, mixture, Dᵩ,
                     offset, α, β, updateσₙ, h_upper, polyaoffset)
             else
-                update_dsp!(groupsize_common, ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings,
-                    mixture, Dᵩ, offset, α, β, updateσₙ, h_upper, polyaoffset)
+                update_dsp!(groupsize_common, ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings, mixture, Dᵩ, offset, α, β, updateσₙ, h_upper, polyaoffset)
             end
         elseif innovModel == :homogaussuniv # homoscedastic case
             update_homoscedastic_uni!(ν, H, 4, exp(m₀ / 2))

@@ -29,5 +29,3 @@ function mueta(link::LogLinLink, η::Real)
     η₀ = link.threshold
     η <= η₀ ? exp(η) : exp(η₀)
 end
-
-
