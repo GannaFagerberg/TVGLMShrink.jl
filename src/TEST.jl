@@ -33,6 +33,179 @@ function IPLFWorkspace(
     )
 end
 
+
+
+function FFBS_SLR_scaling_test!(
+    Draws,
+    U,
+    Y,
+    A,
+    B,
+    condMoments::Function,
+    param,
+    Σₙ,
+    μ₀,
+    Σ₀,
+    maxIter,
+    ScaleMat, Svec, 
+    ws;
+    α=1,
+    β=0,
+    κ=0,
+    filter_output=false,
+    sample_t0=true,
+    nFailure=Ref(0)
+)
+
+    T = length(Y)
+    n = length(μ₀)
+    q = size(U, 2)
+
+    staticA = ndims(A) != 3
+
+    # The new update expects B to be a matrix and u to be a vector.
+    # In GibbsTVGLM, B is currently the scalar 0.0.
+    Bmat = B isa Number ? fill(float(B), n, q) : B
+
+    # ----------------------------------------------------------
+    # Unscented-transform weights
+    # ----------------------------------------------------------
+
+    λ = α^2 * (n + κ) - n
+
+    ωₘ = [
+        λ / (n + λ)
+        ones(2 * n) / (2 * (n + λ))
+    ]
+
+    ωₛ = [
+        λ / (n + λ) + (1 - α^2 + β)
+        ωₘ[2:end]
+    ]
+
+    γ = sqrt(n + λ)
+
+    # ----------------------------------------------------------
+    # Filtering storage
+    # ----------------------------------------------------------
+
+    μ_filter = zeros(T, n)
+    Σ_filter = zeros(n, n, T)
+
+    μ_pred = zeros(T, n)
+    Σ_pred = zeros(n, n, T)
+
+    μ = deepcopy(μ₀)
+    Σ = deepcopy(Σ₀)
+
+    # ----------------------------------------------------------
+    # Forward filtering
+    # ----------------------------------------------------------
+
+    for t in 1:T
+
+        filter_result = try
+
+        S = ScaleMat(param, μ, t)
+        Svec[:, :, t] .= S
+
+        At = staticA ? A : (@view A[:, :, t])
+
+        # Support a static matrix, a vector of PDMat objects,
+        # or an n×n×T covariance array.
+        Σₙ_raw = if ndims(Σₙ) == 3
+            @view Σₙ[:, :, t]
+        elseif Σₙ isa AbstractVector
+            Σₙ[t]
+        else
+            Σₙ
+        end
+
+        Σₙt = Hermitian(
+            Matrix(S * Σₙ_raw * S) + eps(Float64) * I
+        )
+
+        # Always keep the control input as a vector.
+        u = @view U[t, :]
+
+           kalmanfilter_update_IPLF_test(
+                μ,
+                Σ,
+                u,
+                Y[t],          # transformed sufficient-statistic observation
+                At,
+                Bmat,
+                condMoments,
+                param,
+                Σₙt,
+                t,
+                maxIter,
+                γ,
+                ωₘ,
+                ωₛ,
+                ws
+            )
+
+        catch err
+
+            nFailure[] += 1
+
+            @error(
+                "Sufficient-statistics IPLF failed at time $t",
+                exception=(err, catch_backtrace())
+            )
+
+            return nothing
+        end
+
+        μ, Σ, μ̄, Σ̄ = filter_result
+
+        μ_filter[t, :] .= μ
+        Σ_filter[:, :, t] .= Σ
+
+        μ_pred[t, :] .= μ̄
+        Σ_pred[:, :, t] .= Σ̄
+    end
+
+    # ----------------------------------------------------------
+    # Backward sampling
+    # ----------------------------------------------------------
+
+    Draws_old = copy(Draws)
+
+        try
+            SMCsamplers.BackwardSampling!(
+                Draws,
+                μ_filter,
+                Σ_filter,
+                μ_pred,
+                Σ_pred,
+                A,
+                μ₀,
+                Σ₀;
+                sample_t0 = sample_t0
+            )
+
+        catch err
+            if err isa LinearAlgebra.PosDefException ||
+            err isa LinearAlgebra.SingularException
+
+                Draws .= Draws_old
+                nFailure[] += 1
+
+                return nothing
+            else
+                rethrow(err)
+            end
+    end
+
+    if filter_output
+        return μ_filter, Σ_filter
+    end
+
+    return nothing
+end
+
 function FFBS_SLR_test!(
     Draws,
     U,
@@ -260,302 +433,6 @@ end
 # Stores all the log(y) first and then log(1-y)
 # Lopps through every observation
 
-
-
-function kalmanfilter_update_IPLF_test_try(
-    mu::AbstractVector,
-    Omega::AbstractMatrix,
-    u::AbstractVector,
-    z::AbstractVector,
-    A::AbstractMatrix,
-    B::AbstractMatrix,
-    condMoments,
-    param,
-    Sigma_n::AbstractMatrix,
-    t,
-    maxIter::Integer,
-    gamma,
-    w_mean::AbstractVector,
-    w_cov::AbstractVector,
-    ws;
-    tol::Real = 1e-3,
-    covariance_floor::Real = 1e-10,
-    return_diagnostics::Bool = false,
-)
-
-    maxIter >= 1 ||
-        throw(ArgumentError("maxIter must be at least one."))
-
-    # ----------------------------------------------------------
-    # Prior propagation
-    # ----------------------------------------------------------
-
-    mu_prior = A * mu .+ B * u
-
-    Omega_prior = _make_spd(A * Omega * A' + Sigma_n;relative_floor = covariance_floor,)
-    #Omega_prior = A * Omega * A' + Sigma_n
-
-    mu_iter = copy(mu_prior)
-    Omega_iter = copy(Omega_prior)
-
-    # z is already an AbstractVector; no need to collect/copy it
-    z_vec = z
-
-    observation_dimension = length(z_vec)
-
-    last_diagnostics = nothing
-
-    # ----------------------------------------------------------
-    # IPLF iterations
-    # ----------------------------------------------------------
-
-    for iteration in 1:maxIter
-
-        Omega_iter = _make_spd(Omega_iter;relative_floor = covariance_floor,)
-       
-        #L = cholesky(Symmetric(Omega_iter)).L
-        F_iter = cholesky(Symmetric(Omega_iter))
-        L = F_iter.L
-
-        # Sigma points
-        spread = L * gamma
-
-        sigma_points = hcat(
-            mu_iter,
-            mu_iter .+ spread,
-            mu_iter .- spread
-        )
-
-        number_of_points = size(sigma_points, 2)
-
-        length(w_mean) == number_of_points ||
-            throw(DimensionMismatch(
-                "length(w_mean)=$(length(w_mean)), but there are " *
-                "$number_of_points sigma points.",
-            ))
-
-        length(w_cov) == number_of_points ||
-            throw(DimensionMismatch(
-                "length(w_cov)=$(length(w_cov)), but there are " *
-                "$number_of_points sigma points.",
-            ))
-
-        # ======================================================
-        # Conditional moments
-        #
-        # STEP 2:
-        #   - Store all conditional means because they are needed
-        #     later for Cov[x,z] and Var(E[z|x]).
-        #
-        #   - Do NOT store all conditional covariance matrices.
-        #     Accumulate
-        #
-        #       E[Var(z|x)] ≈ Σ_j w_mean[j] R_j
-        #
-        #     immediately.
-        # ======================================================
-
-        # One column per sigma point
-        conditional_means     = ws.conditional_means
-        covariance_j       = ws.conditional_covariance
-        z_mean                = ws.z_mean
-        mean_conditional_covariance = ws.mean_conditional_covariance
-
-        fill!(z_mean, 0)
-        fill!(mean_conditional_covariance, 0)
-
-        for j in 1:number_of_points
-
-            # Write conditional mean directly into workspace column j
-            mean_j = @view conditional_means[:, j]
-
-            condMoments(
-                mean_j,
-                covariance_j,
-                param,
-                @view(sigma_points[:, j]),
-                t
-            )
-
-            length(mean_j) == observation_dimension ||
-                throw(DimensionMismatch(
-                    "Conditional mean at sigma point $j has length " *
-                    "$(length(mean_j)), but observation dimension is " *
-                    "$observation_dimension.",
-                ))
-
-            size(covariance_j) ==
-                (observation_dimension, observation_dimension) ||
-                throw(DimensionMismatch(
-                    "Conditional covariance at sigma point $j must be " *
-                    "$observation_dimension-by-$observation_dimension.",
-                ))
-
-            # E[z]
-            z_mean .+= w_mean[j] .* mean_j
-
-            # E[Var(z|x)]
-            mean_conditional_covariance .+= w_mean[j] .* covariance_j
-        end
-        # ======================================================
-        # Cross covariance Cov[x,z]
-        # ======================================================
-
-        centered_states = ws.centered_states
-        centered_means  = ws.centered_means
-
-        centered_states .= sigma_points .- mu_iter
-        centered_means  .= conditional_means .- z_mean
-
-        P_xz = ws.P_xz
-
-        fill!(P_xz, 0)
-
-        @inbounds for j in 1:number_of_points
-            wj = w_cov[j]
-
-            for b in axes(centered_means, 1)
-                mb = centered_means[b, j]
-
-                for a in axes(centered_states, 1)
-                    P_xz[a, b] +=
-                        wj * centered_states[a, j] * mb
-                end
-            end
-        end
-
-        if t == 1
-            @show P_xz
-
-            for k in axes(P_xz, 1)
-                println(
-                    "state $k: ",
-                    norm(@view P_xz[k, :])
-                )
-            end
-        end
-        # ======================================================
-        # Total observation covariance
-        #
-        # Var[z] =
-        #   E[Var(z|x)] + Var(E[z|x])
-        # ======================================================
-
-        P_z = ws.P_z
-
-        # E[Var(z|x)]
-        P_z .= mean_conditional_covariance
-
-                # + Var(E[z|x])
-                for j in 1:number_of_points
-                    wj = w_cov[j]
-
-                    @inbounds for b in axes(centered_means, 1)
-                        db = centered_means[b, j]
-
-                        for a in axes(centered_means, 1)
-                            P_z[a, b] += wj * centered_means[a, j] * db
-                        end
-                    end
-                end
-
-        P_z = _make_spd(
-            P_z;
-            relative_floor = covariance_floor
-        )
-
-        # Statistical linear regression
-        H_k = (F_iter \ P_xz)'
-
-        b_k =
-            z_mean - H_k * mu_iter
-
-        R_k = _make_spd(
-            P_z - H_k * Omega_iter * H_k';
-            relative_floor = covariance_floor
-        )
-
-        # Kalman update
-        z_prior_mean =
-            H_k * mu_prior + b_k
-
-        innovation_covariance = _make_spd(
-            H_k * Omega_prior * H_k' + R_k;
-            relative_floor = covariance_floor
-        )
-
-        F = cholesky(
-            Symmetric(innovation_covariance)
-        )
-
-        gain =
-            (F \ (H_k * Omega_prior'))'
-
-        mu_updated =
-            mu_prior +
-            gain * (z_vec - z_prior_mean)
-
-        Omega_updated = _make_spd(
-            Omega_prior -
-            gain * innovation_covariance * gain';
-            relative_floor = covariance_floor
-        )
-
-        # With Joseph
-        #n_state = length(mu_prior)
-        #I_n = Matrix{Float64}(I, n_state, n_state)
-        #I_KH = I_n - gain * H_k
-        #Omega_updated =I_KH * Omega_prior * I_KH' + gain * R_k * gain'
-        #Omega_updated = (Omega_updated + Omega_updated') / 2
-
-        # ======================================================
-        # IPLF convergence
-        # ======================================================
-
-        distance = gaussian_kld(
-            mu_iter,
-            Omega_iter,
-            mu_updated,
-            Omega_updated;
-            relative_floor = covariance_floor,
-        )
-
-        last_diagnostics = (
-            iteration = iteration,
-            distance = distance,
-            predicted_observation = z_prior_mean,
-            marginal_observation = z_mean,
-            observation_covariance = P_z,
-            linearization = H_k,
-            offset = b_k,
-            residual_covariance = R_k,
-            innovation_covariance = innovation_covariance,
-            gain = gain,
-        )
-
-        mu_iter = mu_updated
-        Omega_iter = Omega_updated
-
-        distance < tol && break
-    end
-
-    # ----------------------------------------------------------
-    # Return
-    # ----------------------------------------------------------
-
-    if return_diagnostics
-
-        return (
-            mu = mu_iter,
-            Omega = Omega_iter,
-            mu_prior = mu_prior,
-            Omega_prior = Omega_prior,
-            diagnostics = last_diagnostics,
-        )
-    end
-
-    return mu_iter, Omega_iter, mu_prior, Omega_prior
-end
 
 
 function kalmanfilter_update_IPLF_test(
@@ -816,6 +693,15 @@ function kalmanfilter_update_IPLF_test(
 
         mu_updated =mu_prior + gain * (z_vec - z_prior_mean)
 
+        # OBS! Project precision state back to its admissible domain
+        precision_idx = param.Zidx[2]
+        precision_floor = -3.0
+
+        mu_updated[precision_idx] .=
+        max.(
+            mu_updated[precision_idx],
+            precision_floor
+        )
 
         ### Wihtout Joseph
         #Omega_updated = _make_spd(Omega_prior -gain * innovation_covariance * gain';relative_floor = covariance_floor,)
@@ -1231,7 +1117,8 @@ function make_beta_sufficient_statistics_adapters_grouped(
     raw_condCov;
     variance_denominator_offset::Real = 1.0,
     mean_boundary::Real = 1e-12,
-    min_concentration::Real = 1e-10
+    min_concentration::Real = 1e-10,
+    shape_floor::Real = 1e-6
 )
 
     function beta_shapes_from_original_model(
@@ -1239,37 +1126,17 @@ function make_beta_sufficient_statistics_adapters_grouped(
             state,
             t
         )
-            ημ =
-                param.Z[1][t] *
-                state[param.Zidx[1]]
+            
+            ημ =param.Z[1][t] *state[param.Zidx[1]]
+            ηκ =param.Z[2][t] *state[param.Zidx[2]]
 
-            ηκ =
-                param.Z[2][t] *
-                state[param.Zidx[2]]
-
-            μ =
-                GLM.linkinv.(
-                    Ref(param.link[1]),
-                    ημ
-                )
-
-            κ =
-                GLM.linkinv.(
-                    Ref(param.link[2]),
-                    ηκ
-                )
+            μ =linkinv.(Ref(param.link[1]),ημ)
+            κ =linkinv.(Ref(param.link[2]),ηκ)
 
             # Compare against old construction only for extreme sigma points
-            μ = clamp.(
-                μ,
-                mean_boundary,
-                1.0 - mean_boundary
-            )
+            μ = clamp.(μ,mean_boundary,1.0 - mean_boundary)
 
-            κ = max.(
-                κ,
-                min_concentration
-            )
+            κ = max.(κ,min_concentration)
 
             all(isfinite, μ) ||
                 throw(DomainError(
@@ -1283,16 +1150,40 @@ function make_beta_sufficient_statistics_adapters_grouped(
                     "Non-finite Beta concentration."
                 ))
 
+            # Raw Beta shapes implied by the model
+            alpha_raw = μ .* κ
+            beta_raw  = (1.0 .- μ) .* κ
+
+            # Diagnostic: check when SLR sigma points approach the boundary
+            alpha_raw = μ .* κ
+            beta_raw  = (1.0 .- μ) .* κ
+
+            #if any(alpha_raw .< shape_floor) ||
+            #any(beta_raw .< shape_floor)
+
+              #  @show t
+
+               # @show extrema(ημ)
+               # @show extrema(μ)
+
+               # @show extrema(ηκ)
+                #@show extrema(κ)
+
+               # @show minimum(alpha_raw)
+               # @show minimum(beta_raw)
+            #end
+            
+            # Numerical regularization for sufficient-statistic moments
             alpha_shape =
                 max.(
-                    μ .* κ,
-                    min_concentration
+                    alpha_raw,
+                    shape_floor
                 )
 
             beta_shape =
                 max.(
-                    (1.0 .- μ) .* κ,
-                    min_concentration
+                    beta_raw,
+                    shape_floor
                 )
 
             κ_effective =
@@ -1396,7 +1287,7 @@ function make_beta_sufficient_statistics_adapters_grouped(
     return condMoments_beta_sufficient_grouped!
 end
 
-
+###############################################
 function make_beta_sufficient_statistics_adapters_summed(
     raw_condMean,
     raw_condCov;

@@ -74,7 +74,7 @@ invlink = (
 for t in 1:T
 
     # unrestricted mean state
-    β[t, 1] =0.8 * sin(0.5π * t / 150)
+    β[t, 1] =0.8 * sin(2.5π * t / 150)
 
     # unrestricted log-precision state
     #γ[t, 1] =1.5 + 0.5 * cos(2π * t / 200)
@@ -228,8 +228,8 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
-    nIter=2000,              # Number of iterations in the Gibbs sampler
-    nBurn=2000,               # Number of burn-in iterations
+    nIter=4000,              # Number of iterations in the Gibbs sampler
+    nBurn=3000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility

@@ -11,6 +11,9 @@ using Utils: quantile_multidim, get_slurm_id
 using Utils: mvcolors as colors
 using GLM
 using Roots
+using TVGLMShrink: PositiveHardLink
+#pathof(TVGLMShrink)
+
 slurm_id = get_slurm_id() # get slurm ID, if on cluster
 
 include(joinpath(@__DIR__, "../..") * "/examples/betareg/BetaModel.jl") # BetaReg stuff
@@ -69,9 +72,16 @@ f_ϕ(x) = priorparam[2] - invlink[2](x)
 μ₀ = [β_m0; β_ϕ0]
 κ₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
 Σ₀ = :fisherinfo # Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
+
 link = (LogitLink(), LogLinLink())
+#link = (LogitLink(),PositiveHardLink(1e-6))
+#link = (LogitLink(),ShiftedSoftplusLink(1e-6))
 
 ## Set up the prior, model and algorithm settings
+
+#for j in 2:size(X, 2)
+   # X[:, j] .= (X[:, j] .- mean(X[:, j])) ./ std(X[:, j])
+#end
 
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=1)
 priorSettings = (
@@ -96,8 +106,8 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
-    nIter=1000,              # Number of iterations in the Gibbs sampler
-    nBurn=1000,               # Number of burn-in iterations
+    nIter=2000,              # Number of iterations in the Gibbs sampler
+    nBurn=2000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility
@@ -106,7 +116,7 @@ algoSettings = (
     scaling=:none,            # Scaling of state innov, can be :full, :diagonal or :none
     FisherInfo=FisherInfoBeta,# Fisher info
     nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
-    fixed_scaling = false,     # Should the scaling matrix be fixed across Gibbs iter?
+    fixed_scaling = true,     # Should the scaling matrix be fixed across Gibbs iter?
     verbose=true,             # Whether to print verbose output during sampling.
 );
 
@@ -115,7 +125,7 @@ dateVec = 1:T
 keep_t0 = false # Whether to keep the state at time t=0 in the output of the Gibbs sampler
 results = []
 interpMethod = :linear
-scaling = :none
+scaling = :diag
 nPerGroup = 5
 
 ## Laplace approximation 
@@ -137,18 +147,17 @@ PlotPostParamEvolution!(plt, quant_paramtime_la, "Laplace", groupSizes; dateVec=
 
 #savefig(figFolder * "$(applName)_param_$(methodlabel)_$(algoSettings.scaling)_$(dataSettings.nPerGroup).svg")
 
-
-
 ## IPLF 
 methodlabel = "IPLF"
 algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_slr);
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
+@show modelSettings.link
 
 θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings);
 
 prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
-println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
-    of the simulated trajectories")
+println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% of the simulated trajectories")
+
 
 # Parameter quantiles on the parameter time scale - this always includes t=0
 plt = plot_param_path_betareg(β, γ)

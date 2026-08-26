@@ -275,7 +275,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
                 FFBS_SLR_test!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
                 #FFBS_SLR_test!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=0.001, β=2, κ=0, sample_t0=true, nFailure=nFailure)
             else
-                FFBS_SLR!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀, nMaxIter, ScaleMat, Svec; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
+                FFBS_SLR_scaling_test!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀, nMaxIter, ScaleMat, Svec, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
             end
         elseif stateSamplingMethod == :pgas
             θ = PGASsimulate!(θparticles, Y, nState, nParticles, param,

@@ -50,7 +50,9 @@ p = length(covSel[1])
 q = length(covSel[2])
 
 # Link function for the mean and precision
+
 link = (LogitLink(), LogLinLink())
+#link = (LogitLink(),PositiveHardLink(1e-6))
 
 ## The prior for the state at time t=0 using priors on intercepts and Fisher info
 priorparam = [0.15, exp(6)] # Best guess for y₀ ∼ BetaMean(priorparam_μ[1], priorparam_μ[2])
@@ -63,6 +65,12 @@ n₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFishe
 Σ₀ = :fisherinfo # Σ₀ = (1 / n₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
 
 ## Set up the prior, model and algorithm settings
+
+for j in 2:size(X, 2)
+    X[:, j] .= (X[:, j] .- mean(X[:, j])) 
+    #./ std(X[:, j])
+end
+
 
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=1)
 priorSettings = (
@@ -87,13 +95,13 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
-    nIter=2000,              # Number of iterations in the Gibbs sampler
-    nBurn=2000,               # Number of burn-in iterations
+    nIter=5000,              # Number of iterations in the Gibbs sampler
+    nBurn=3000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility
     h_upper=Inf,              # Upper bound for log-volatility
-    polyaoffset=0.00,          # Offset for Polya-Gamma variables in the update of h_t
+    polyaoffset=0.01,          # Offset for Polya-Gamma variables in the update of h_t
     scaling=:full,            # Scaling of state innov, can be :full, :diagonal or :none
     FisherInfo=FisherInfoBeta,# Fisher info
     nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
@@ -109,6 +117,11 @@ results = []
 interpMethod = :linear
 
 # No scaling and nPerGroup = 3
+
+dateVec = 1:T
+keep_t0 = false # Whether to keep the state at time t=0 in the output of the Gibbs sampler
+results = []
+interpMethod = :linear
 scaling = :none
 nPerGroup = 5
 
@@ -133,6 +146,8 @@ plot(plt..., layout=(3, 1), size=(1000, 1200), margin=3mm)
 
 
 ### IPLF
+
+
 methodlabel = "IPLF"
 algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_slr);
 dataSettings = (y=y , X=X, covSel=covSel, nPerGroup=nPerGroup);
@@ -144,6 +159,14 @@ println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% of the sim
 
 #size(θpost)
 quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
+#titles = vcat([L"\beta_{%$(j-1)}" for j in 1:p], [L"\gamma_{%$(j-1)}" for j in 1:q])
+#plt = PlotPostParamEvolution(quant_paramtime, methodlabel, groupSizes;titles=titles, dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
+#plot(plt..., layout=(4, 1), size=(1000, 1200), margin=3mm)
+
+PlotPostParamEvolution!(plt, quant_paramtime, methodlabel, groupSizes;
+    dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=1, c=colors[3])
+plot(plt..., layout=(3, 1), size=(1000, 1200), margin=3mm)
+
 
 
 
@@ -171,8 +194,10 @@ println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)%
 quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 
 titles = vcat([L"\beta_{%$(j-1)}" for j in 1:p], [L"\gamma_{%$(j-1)}" for j in 1:q])
-plt = PlotPostParamEvolution(quant_paramtime, methodlabel, groupSizes;
-    titles=titles, dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
+#plt = PlotPostParamEvolution(quant_paramtime, methodlabel, groupSizes;titles=titles, dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
+
+PlotPostParamEvolution!(plt, quant_paramtime, methodlabel, groupSizes;
+    dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=1, c=colors[2])
 plot(plt..., layout=(3, 1), size=(1000, 1200), margin=3mm)
 
 

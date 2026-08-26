@@ -7,6 +7,9 @@ using GLM: Link
 import GLM
 import GLM: linkfun, linkinv, mueta
 export linkfun, linkinv, mueta
+export LogLinLink,
+       PositiveHardLink,
+       ShiftedSoftplusLink
 using SpecialFunctions: digamma, trigamma
 using Roots: find_zero
 
@@ -23,6 +26,6 @@ export exp_lin, exp_lin_inv, simulateAR, simulateVAR, interpParam2Obs, scalingLa
 export XDiagX, XDiagZ, densityScores
 
 include("TVGLMModels.jl")
-export TVGLMmodel, LogLinLink
+export TVGLMmodel, LogLinLink, PositiveHardLink
 
 end
