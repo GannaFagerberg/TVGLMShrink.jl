@@ -59,7 +59,7 @@ function linkfun(link::PositiveHardLink, κ::Real)
     return κ
 end
 
-
+### SoftplusLink
 struct ShiftedSoftplusLink{T<:Real} <: Link
     floor::T
 end
@@ -112,4 +112,119 @@ function linkfun(
     return y > 20 ?
         y :
         log(expm1(y))
+end
+
+
+### Woodart
+# -------------------------------------------------------
+# Woodard et al. link
+#
+# g(κ)     = log(exp(ακ) - 1) / α
+# g⁻¹(η)   = log(1 + exp(αη)) / α
+# -------------------------------------------------------
+
+struct WoodardLink{T<:Real} <: Link
+    α::T
+end
+
+WoodardLink() = WoodardLink(1.0)
+
+
+# inverse link: η -> κ
+function linkinv(
+    link::WoodardLink,
+    η::Real
+)
+    α = link.α
+    z = α * η
+
+    # numerically stable softplus
+    if z > 0
+        return (z + log1p(exp(-z))) / α
+    else
+        return log1p(exp(z)) / α
+    end
+end
+
+
+# derivative dκ/dη
+function mueta(
+    link::WoodardLink,
+    η::Real
+)
+    α = link.α
+    z = α * η
+
+    # numerically stable logistic(αη)
+    if z >= 0
+        return inv(1 + exp(-z))
+    else
+        ez = exp(z)
+        return ez / (1 + ez)
+    end
+end
+
+
+# link: κ -> η
+function linkfun(
+    link::WoodardLink,
+    κ::Real
+)
+    κ > 0 ||
+        throw(DomainError(
+            κ,
+            "κ must be positive."
+        ))
+
+    α = link.α
+    z = α * κ
+
+    # log(exp(z) - 1), evaluated stably
+    if z > log(2)
+        return (z + log1p(-exp(-z))) / α
+    else
+        return log(expm1(z)) / α
+    end
+end
+
+struct UnitHardLink{T<:Real} <: Link
+    floor::T
+    ceiling::T
+end
+
+UnitHardLink() = UnitHardLink(1e-3, 1 - 1e-3)
+
+
+# inverse link: η -> μ
+function linkinv(
+    link::UnitHardLink,
+    η::Real
+)
+    return clamp(η, link.floor, link.ceiling)
+end
+
+
+# derivative dμ/dη
+function mueta(
+    link::UnitHardLink,
+    η::Real
+)
+    return (link.floor < η < link.ceiling) ?
+        one(η) :
+        zero(η)
+end
+
+
+# link: μ -> η
+function linkfun(
+    link::UnitHardLink,
+    μ::Real
+)
+    link.floor <= μ <= link.ceiling ||
+        throw(DomainError(
+            μ,
+            "μ must be between $(link.floor) and $(link.ceiling)."
+        ))
+
+    return μ
 end

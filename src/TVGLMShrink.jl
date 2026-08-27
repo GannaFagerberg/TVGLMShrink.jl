@@ -3,20 +3,23 @@ module TVGLMShrink
 using Distributions, LinearAlgebra, ProgressMeter, BandedMatrices, Plots, LaTeXStrings
 using PDMats, LogExpFunctions
 using SMCsamplers, DynamicGlobalLocalShrinkage, Utils
-using GLM: Link
+using GLM: Link, CauchitLink, ProbitLink,CloglogLink
 import GLM
 import GLM: linkfun, linkinv, mueta
 export linkfun, linkinv, mueta
 export LogLinLink,
        PositiveHardLink,
-       ShiftedSoftplusLink
+       ShiftedSoftplusLink,
+       WoodardLink,
+       UnitHardLink
 using SpecialFunctions: digamma, trigamma
 using Roots: find_zero
 
-include("TEST.jl")
+include("TVGLM_TransformedFFBS_KF.jl")
 include("TVGLM_Gibbs.jl")
+include("BetaModelSufficient.jl")
 
-export FFBS_SLR_test!, GibbsTVGLM
+export FFBS_SLR_transformed!, FFBS_SLR_transformed_scaling!!, GibbsTVGLM
 
 include("TVGLMPlots.jl")
 export PlotPostParamEvolution, PlotPostParamEvolution!, postPredCheckDistr

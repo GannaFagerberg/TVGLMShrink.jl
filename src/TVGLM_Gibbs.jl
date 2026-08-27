@@ -78,8 +78,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
             stateSamplingMethod=:ffbs_laplace, nIter=nCalibScale,
             nBurn=round(Int, 0.1 * nCalibScale), verbose=false)
 
-        θpost0, _, _, _, _ = GibbsTVGLM(dataSettings, priorSettings, modelSettings,
-            algoSettingsCalibrate, progessbar=(status=progessbar.status, message="Calibrating scaling matrix: "))
+        θpost0, _ = GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettingsCalibrate, progessbar=(status=progessbar.status, message="Calibrating scaling matrix: "))
         for t in 1:T
             θmedian_t = median(θpost0[t, :, :]; dims=2)
             if scaling == :full
@@ -98,8 +97,8 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
             end
         end
         # Scaling-adjusted prior on μ
-        scalingFactor_avg = diag(mean(Svec, dims = 3)[:,:,1])
-        m₀ = m₀ - 2*log.(scalingFactor_avg)
+        #scalingFactor_avg = diag(mean(Svec, dims = 3)[:,:,1])
+        #m₀ = m₀ - 2*log.(scalingFactor_avg)
         priorSettings = (; priorSettings..., m₀ = m₀);
         #println("Average scaling matrix:")
         #println(mean(Svec, dims = 3)[:,:,1])
@@ -271,11 +270,10 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
             end
         elseif stateSamplingMethod == :ffbs_slr
             if scaling === :none
-                #FFBS_SLR_test!(θ, U, Y, A, B, condMean, condCov, param, param.Σᵥ, μ₀, Σ₀,nMaxIter; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
-                FFBS_SLR_test!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
+                FFBS_SLR_transformed!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
                 #FFBS_SLR_test!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=0.001, β=2, κ=0, sample_t0=true, nFailure=nFailure)
             else
-                FFBS_SLR_scaling_test!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀, nMaxIter, ScaleMat, Svec, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
+                FFBS_SLR_transformed_scaling!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀, nMaxIter, ScaleMat, Svec, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
             end
         elseif stateSamplingMethod == :pgas
             θ = PGASsimulate!(θparticles, Y, nState, nParticles, param,
@@ -317,24 +315,25 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
                 update_dsp!(groupsize_common, ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings, mixture, Dᵩ, offset, α, β, updateσₙ, h_upper, polyaoffset)
             end
         elseif innovModel == :homogaussuniv # homoscedastic case
-            update_homoscedastic_uni!(ν, H, 4, exp(m₀ / 2))
+            update_homoscedastic_uni!(ν, H, 4, exp.(m₀/2))
         else
             error("the chosen innovation model is not implemented yet.")
         end
 
         if i > nBurn
             θpost[:, :, i-nBurn] = θ
-            Hpost[:, :, i-nBurn] = H
-            ϕpost[:, i-nBurn] = ϕ
-            σ²ₙpost[:, i-nBurn] = σ²ₙ
-            μpost[:, i-nBurn] = μ
+            #Hpost[:, :, i-nBurn] = H
+            #ϕpost[:, i-nBurn] = ϕ
+            #σ²ₙpost[:, i-nBurn] = σ²ₙ
+            #μpost[:, i-nBurn] = μ
             if collectScaling
-                Svec_collect[:, :, :, i-nBurn] = Svec
+                #Svec_collect[:, :, :, i-nBurn] = Svec
             end
         end
     end
 
-    return θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure, Svec_collect
+    #return θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure, Svec_collect
+    return θpost, nFailure
 end
 
 

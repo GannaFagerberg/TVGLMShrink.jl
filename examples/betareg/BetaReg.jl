@@ -13,6 +13,7 @@ using GLM
 using Roots
 using TVGLMShrink: PositiveHardLink
 #pathof(TVGLMShrink)
+#pathof(DynamicGlobalLocalShrinkage)
 
 slurm_id = get_slurm_id() # get slurm ID, if on cluster
 
@@ -43,7 +44,7 @@ mₑ = [0.0, 0.0];     # Mean for the AR(1) processes that generate the covariat
 #y, X, β, γ, μtime, ψtime, αtime, βtime = simulate_beta_reg_data(T, nCov, covSel,
  #   x -> linkinv(link[1], x), x -> linkinv(link[2], x), ρ, σₑ, mₑ, β₀, γ₀);
 
-y, X, β, γ, μtime, ψtime, αtime, βtime = simulate_beta_reg_data(T, nCov, covSel,
+y, Xmx, β, γ, μtime, ψtime, αtime, βtime = simulate_beta_reg_data(T, nCov, covSel,
     invlink[1], invlink[2], ρ, σₑ, mₑ, β₀, γ₀);
 y = clamp.(y, 1e-16, 1 - 1e-16) # Ensure y is in (0, 1) for Beta regression
 ## Plot the true parameter paths and the time series
@@ -73,15 +74,29 @@ f_ϕ(x) = priorparam[2] - invlink[2](x)
 κ₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
 Σ₀ = :fisherinfo # Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
 
-link = (LogitLink(), LogLinLink())
-#link = (LogitLink(),PositiveHardLink(1e-6))
-#link = (LogitLink(),ShiftedSoftplusLink(1e-6))
+#link = (LogitLink(), LogLinLink()) # best so far
+link = (CauchitLink(),LogLinLink())
+#link = (LogitLink(),WoodardLink(2.0))
+#link = (UnitHardLink(),LogLinLink()) ### distrotrs inference
+#link = (ProbitLink(),LogLinLink()) ### bad, underestimayes
+#link = (CloglogLink(),LogLinLink()) ### bad, underestimayes
+#CloglogLink
 
 ## Set up the prior, model and algorithm settings
 
-#for j in 2:size(X, 2)
-   # X[:, j] .= (X[:, j] .- mean(X[:, j])) ./ std(X[:, j])
-#end
+demean = false
+if demean
+    for j in 2:size(X, 2)
+    X[:, j] .= (Xmx[:, j] .- mean(Xmx[:, j]))
+    end
+else
+    X = Xmx
+end
+
+#plot(X[:,3])
+#plot!(Xmx[:,3],color ="red")
+
+ #./ std(X[:, j])
 
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=1)
 priorSettings = (
@@ -106,8 +121,8 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
-    nIter=2000,              # Number of iterations in the Gibbs sampler
-    nBurn=2000,               # Number of burn-in iterations
+    nIter=10000,              # Number of iterations in the Gibbs sampler
+    nBurn=3000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility
@@ -120,15 +135,35 @@ algoSettings = (
     verbose=true,             # Whether to print verbose output during sampling.
 );
 
-
 dateVec = 1:T
 keep_t0 = false # Whether to keep the state at time t=0 in the output of the Gibbs sampler
 results = []
 interpMethod = :linear
-scaling = :diag
+scaling = :none
 nPerGroup = 5
 
+## PGAS
+methodlabel = "PGAS"
+algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:pgas);
+dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
+
+#Random.seed!(2)
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
+    priorSettings, modelSettings, algoSettings);
+
+prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
+println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
+    of the simulated trajectories")
+
+# Parameter quantiles on the parameter time scale - this always includes t=0
+quant_paramtime_pgas = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
+plt_reg = plot_param_path_betareg(β, γ)
+titles = [L"\beta_{%$(j-1)}" for j in 1:p]
+PlotPostParamEvolution!(plt_reg, quant_paramtime_pgas, "PGAS",
+    groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=2, c=colors[1], legend=:bottomleft)
+
 ## Laplace approximation 
+#Random.seed!(2)
 methodlabel = "Laplace"
 algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_laplace);
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
@@ -141,10 +176,9 @@ println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)%
     of the simulated trajectories")
 
 # Parameter quantiles on the parameter time scale - this always includes t=0
-plt = plot_param_path_betareg(β, γ)
+#plt = plot_param_path_betareg(β, γ)
 quant_paramtime_la = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
-PlotPostParamEvolution!(plt, quant_paramtime_la, "Laplace", groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=2, c=colors[4])
-
+PlotPostParamEvolution!(plt_reg, quant_paramtime_la, "Laplace", groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=2, c=colors[4])
 #savefig(figFolder * "$(applName)_param_$(methodlabel)_$(algoSettings.scaling)_$(dataSettings.nPerGroup).svg")
 
 ## IPLF 
@@ -153,44 +187,24 @@ algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_sl
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
 @show modelSettings.link
 
+#Random.seed!(2)
 θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings);
-
 prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
 println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% of the simulated trajectories")
 
-
 # Parameter quantiles on the parameter time scale - this always includes t=0
-plt = plot_param_path_betareg(β, γ)
+#plt = plot_param_path_betareg(β, γ)
 quant_paramtime_iplf = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 PlotPostParamEvolution!(plt, quant_paramtime_iplf, "IPLF",groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=2, c=colors[2])
 
-#=
-ylims!(plt[1], (1.75, 2.75))
-plot!(plt[1], legend=:bottomleft)
-ylims!(plt[2], (-0.4, 0.4))
-plot!(plt[2], legend=false)
-ylims!(plt[3], (0.01, 0.06))
-plot!(plt[3], legend=false)
-=#
+#savefig(plt_reg, joinpath(@__DIR__, "beta_reg_sim.pdf"))
+
+    
+display(plt_reg)
+
+# diag - good
+# woodart in precision and others - not good, use loglin or log
+# cauchy not good with IPLF - perhps because it need large thaeat values if mu is near boundraies
 
 #savefig(figFolder * "$(applName)_param_$(methodlabel)_$(algoSettings.scaling)_$(dataSettings.nPerGroup)_withIPLF.svg")
 
-
-## PGAS
-methodlabel = "PGAS"
-algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:pgas);
-dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
-
-θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
-    priorSettings, modelSettings, algoSettings);
-
-prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
-println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
-    of the simulated trajectories")
-
-# Parameter quantiles on the parameter time scale - this always includes t=0
-quant_paramtime_pgas = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
-
-#titles = [L"\beta_{%$(j-1)}" for j in 1:p]
-PlotPostParamEvolution!(plt, quant_paramtime_pgas, "PGAS",
-    groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=2, c=colors[1], legend=:bottomleft)

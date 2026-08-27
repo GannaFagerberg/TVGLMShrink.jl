@@ -35,7 +35,8 @@ iplf_quantiles = Dict()
 # Start plot ONCE: only true parameter paths
 # ------------------------------------------------------------
 
-plt_iplf = plot_param_path_betareg(β, γ)
+#plt_iplf = plot_param_path_betareg(β, γ)
+plt_iplf = nothing
 
 # Use different colors for the five seeds
 seed_colors = [
@@ -55,13 +56,7 @@ for (k, seed) in enumerate(seeds)
 
     Random.seed!(seed)
 
-    θpost,
-    Hpost,
-    ϕpost,
-    σ²ₙpost,
-    μpost,
-    groupSizes,
-    nFailure =
+    θpost, nFailure =
         GibbsTVGLM(
             dataSettings,
             priorSettings,
@@ -139,38 +134,75 @@ for (k, seed) in enumerate(seeds)
     # Add THIS seed to the SAME plot
     # --------------------------------------------------------
 
-    PlotPostParamEvolution!(
-        plt_iplf,
-        quant_paramtime,
-        #"IPLF seed $seed",
-        "",
-        groupSizes;
-        dateVec = dateVec,
-        interpMethod = interpMethod,
-        plot_t0 = keep_t0,
-        interval_style = :solid,
-        lw = 2,
-        c = seed_colors[k]
-    )
+    # --------------------------------------------------------
+# Initialize plot with first seed, then overlay the others
+# --------------------------------------------------------
+
+    if k == 1
+
+        plt_iplf = PlotPostParamEvolution(
+            quant_paramtime,
+            "",
+            groupSizes;
+            titles = titles,
+            dateVec = dateVec,
+            interpMethod = interpMethod,
+            plot_t0 = keep_t0,
+            interval_style = :solid,
+            lw = 2,
+            c = seed_colors[k]
+        )
+
+    else
+
+        PlotPostParamEvolution!(
+            plt_iplf,
+            quant_paramtime,
+            "",
+            groupSizes;
+            dateVec = dateVec,
+            interpMethod = interpMethod,
+            plot_t0 = keep_t0,
+            interval_style = :solid,
+            lw = 2,
+            c = seed_colors[k]
+        )
+
+    end
 end
 
 # ============================================================
 # Show combined plot
 # ============================================================
 
-display(plt_iplf)
+display(
+    plot(
+        plt_iplf...,
+        layout = (length(plt_iplf), 1),
+        size = (1000, 400 * length(plt_iplf)),
+        margin = 3mm
+    )
+)
 
 # Save combined figure
+plt_iplf_combined = plot(
+    plt_iplf...;
+    layout = (length(plt_iplf), 1),
+    size = (1000, 1200)
+)
+
 savefig(
-    plt_iplf,
-    joinpath(save_dir, "IPLF_five_seeds_overlay.pdf")
-) 
+    plt_iplf_combined,
+    joinpath(save_dir, "IPLF_layoff_noscaling_standardised_stability.pdf")
+)
 
 serialize(
-    joinpath(save_dir, "IPLF_all_seeds.jls"),
+    joinpath(save_dir, "IPLF_all_seeds_diag_scaling_std.jls"),
     (
         results = iplf_results,
         quantiles = iplf_quantiles,
         seeds = seeds
     )
 )
+
+# under full now
