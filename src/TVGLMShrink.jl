@@ -21,6 +21,9 @@ include("BetaModelSufficient.jl")
 
 export FFBS_SLR_transformed!, FFBS_SLR_transformed_scaling!!, GibbsTVGLM
 
+export BetaSuffStats, BetaSuffStatsGrouped, BetaSuffStatsAveraged, prepare_observation_transform
+export prepare_observation_transform
+
 include("TVGLMPlots.jl")
 export PlotPostParamEvolution, PlotPostParamEvolution!, postPredCheckDistr
 
@@ -30,5 +33,6 @@ export XDiagX, XDiagZ, densityScores
 
 include("TVGLMModels.jl")
 export TVGLMmodel, LogLinLink, PositiveHardLink
+export AbstractObsTransform,IdentityTransform, make_identity_cond_moments, prepare_observation_transform
 
 end

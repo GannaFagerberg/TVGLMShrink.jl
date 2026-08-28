@@ -11,8 +11,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     ϕ₀, κ₀, m₀, σ₀, ν₀, ψ₀, μ₀, Σ₀, n₀ = priorSettings
     stateSamplingMethod, nParticles, nIter, nBurn, nMaxIter, nPrePGAS, offsetMethod,
     h_upper, polyaoffset, scaling, FisherInfo, nCalibScale, fixed_scaling, verbose = algoSettings
-    #observation, link, condMean, condCov, innovModel, α, β, updateσₙ, nMixComp = modelSettings
-     (;observation,link,condMean,condCov,slrObs,innovModel,α,β,updateσₙ,nMixComp) = modelSettings
+    observation, link, condMean, condCov, innovModel, α, β, updateσₙ, nMixComp = modelSettings
 
     if verbose
         println("$stateSamplingMethod using scaling = $scaling with $nPerGroup obs per group.")
@@ -204,17 +203,54 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     nFailure = Ref(0)
 
     ### For IPLF
+
     if stateSamplingMethod == :ffbs_slr
+        suffstat_mode = all(cs -> cs == [1], covSel) ? :summed : :stacked
+        #suffstat_mode = :stacked
 
-        Y_sufficient = slrObs.Y
-        sufficient_condMoments = slrObs.condMoments
-        nObs = slrObs.nObs
+        if suffstat_mode == :summed
+            nObs = 2
+        else
+            nObs = 2*nPerGroup
+        end
+        
+        ws = TVGLMShrink.IPLFWorkspace(Float64,nState,nObs)
 
-        ws = TVGLMShrink.IPLFWorkspace(
-            Float64,
-            nState,
-            nObs
-        )
+        if suffstat_mode == :summed
+
+            Y_sufficient = [
+                beta_sufficient_observation_summed(Y[t])
+                #beta_sufficient_observation_averaged(Y[t])
+                for t in eachindex(Y)
+            ]
+
+            sufficient_condMoments =
+                make_beta_sufficient_statistics_adapters_summed(
+                #make_beta_sufficient_statistics_adapters_averaged(
+                        condMean,
+                        condCov;
+                        variance_denominator_offset=1.0,
+                        mean_boundary=1e-12,
+                        min_concentration=1e-10
+                )
+
+        else
+
+            Y_sufficient = [
+                beta_sufficient_observation_grouped(Y[t])
+                for t in eachindex(Y)
+            ]
+
+            sufficient_condMoments =
+                make_beta_sufficient_statistics_adapters_grouped(
+                        condMean,
+                        condCov;
+                        variance_denominator_offset=1.0,
+                        mean_boundary=1e-12,
+                        min_concentration=1e-10
+                    )
+
+        end
     end
 
     ### Begin the LOOP

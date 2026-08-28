@@ -228,3 +228,79 @@ function linkfun(
 
     return μ
 end
+
+
+#### Structs for ILF
+abstract type AbstractObsTransform end
+struct IdentityTransform <: AbstractObsTransform end
+
+function make_identity_cond_moments(
+    raw_condMean,
+    raw_condCov
+)
+
+    function condMoments_identity!(
+        mean_z,
+        R,
+        param,
+        state,
+        t
+    )
+
+        μ = raw_condMean(param, state, t)
+        V = raw_condCov(param, state, t)
+
+        # Conditional mean
+        if μ isa Real
+            mean_z[1] = μ
+        else
+            copyto!(mean_z, vec(μ))
+        end
+
+        # Conditional covariance
+        if V isa Real
+            R[1, 1] = V
+        else
+            copyto!(R, V)
+        end
+
+        return nothing
+    end
+
+    return condMoments_identity!
+end
+
+
+function prepare_observation_transform(
+    ::IdentityTransform,
+    Y,
+    condMean,
+    condCov,
+    nPerGroup
+)
+
+    # No transformation of observations
+    Y_transformed = Y
+
+    # Combine existing raw conditional mean/covariance
+    # into the interface expected by IPLF
+    condMoments =
+        make_identity_cond_moments(
+            condMean,
+            condCov
+        )
+
+    # Dimension of one observation supplied to IPLF
+    y₁ = first(Y)
+
+    nObs =
+        y₁ isa Real ?
+        1 :
+        length(vec(y₁))
+
+    return (
+        Y = Y_transformed,
+        condMoments = condMoments,
+        nObs = nObs
+    )
+end

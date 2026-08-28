@@ -36,6 +36,8 @@ function _beta_variance_vector(value, group_size::Int)
     end
 end
 
+
+### For regression
 function beta_sufficient_observation_grouped(
     y;
     clip::Bool=false,
@@ -75,6 +77,190 @@ function beta_sufficient_observation_grouped(
     return z
 end
 
+
+
+function make_beta_sufficient_statistics_adapters_grouped(
+    raw_condMean,
+    raw_condCov;
+    variance_denominator_offset::Real = 1.0,
+    mean_boundary::Real = 1e-12,
+    min_concentration::Real = 1e-10,
+    shape_floor::Real = 1e-6
+)
+
+    function beta_shapes_from_original_model(
+            param,
+            state,
+            t
+        )
+            
+            ημ =param.Z[1][t] *state[param.Zidx[1]]
+            ηκ =param.Z[2][t] *state[param.Zidx[2]]
+
+            #ημ = clamp(ημ, -20.0, 20.0)
+            #ηκ = clamp(ηκ, -20.0, 20.0)
+          
+            μ =linkinv.(Ref(param.link[1]),ημ)
+            κ =linkinv.(Ref(param.link[2]),ηκ)
+
+            # Compare against old construction only for extreme sigma points
+            μ = clamp.(μ,mean_boundary,1.0 - mean_boundary)
+
+            κ = max.(κ,min_concentration)
+
+            all(isfinite, μ) ||
+                throw(DomainError(
+                    μ,
+                    "Non-finite Beta mean."
+                ))
+
+            all(isfinite, κ) ||
+                throw(DomainError(
+                    κ,
+                    "Non-finite Beta concentration."
+                ))
+
+            # Raw Beta shapes implied by the model
+            alpha_raw = μ .* κ
+            beta_raw  = (1.0 .- μ) .* κ
+
+            # Diagnostic: check when SLR sigma points approach the boundary
+            alpha_raw = μ .* κ
+            beta_raw  = (1.0 .- μ) .* κ
+
+            #if any(alpha_raw .< shape_floor) ||
+            #any(beta_raw .< shape_floor)
+
+              #  @show t
+
+               # @show extrema(ημ)
+               # @show extrema(μ)
+
+               # @show extrema(ηκ)
+                #@show extrema(κ)
+
+               # @show minimum(alpha_raw)
+               # @show minimum(beta_raw)
+            #end
+            
+            # Numerical regularization for sufficient-statistic moments
+            alpha_shape =
+                max.(
+                    alpha_raw,
+                    shape_floor
+                )
+
+            beta_shape =
+                max.(
+                    beta_raw,
+                    shape_floor
+                )
+
+            κ_effective =
+                alpha_shape .+ beta_shape
+
+            return κ_effective,
+                alpha_shape,
+                beta_shape
+        end
+
+    # ==========================================================
+    # BOTH sufficient-statistic moments in one call
+    # ==========================================================
+
+    # ==========================================================
+    # BOTH sufficient-statistic moments in one in-place call
+    # ==========================================================
+
+    function condMoments_beta_sufficient_grouped!(
+        mean_z,
+        R,
+        param,
+        state,
+        t
+    )
+
+        # Beta shapes are still constructed once per sigma point
+        κ, alpha_shape, beta_shape =
+            beta_shapes_from_original_model(
+                param,
+                state,
+                t
+            )
+
+        g = length(κ)
+
+        length(mean_z) == 2g ||
+            throw(DimensionMismatch(
+                "mean_z has length $(length(mean_z)), expected $(2g)."
+            ))
+
+        size(R) == (2g, 2g) ||
+            throw(DimensionMismatch(
+                "R has size $(size(R)), expected ($(2g), $(2g))."
+            ))
+
+        # Important because only selected entries of R are written below
+        fill!(R, zero(eltype(R)))
+
+        @inbounds for i in 1:g
+
+            j = g + i
+
+            κi = κ[i]
+            αi = alpha_shape[i]
+            βi = beta_shape[i]
+
+            # ------------------------------------------------------
+            # Conditional mean
+            # ------------------------------------------------------
+
+            digamma_κ = digamma(κi)
+
+            mean_z[i] =
+                digamma(αi) - digamma_κ
+
+            mean_z[j] =
+                digamma(βi) - digamma_κ
+
+            # ------------------------------------------------------
+            # Conditional covariance
+            # ------------------------------------------------------
+
+            trigamma_κ = trigamma(κi)
+
+            variance_log_y =
+                trigamma(αi) - trigamma_κ
+
+            variance_log_one_minus_y =
+                trigamma(βi) - trigamma_κ
+
+            covariance_logs =
+                -trigamma_κ
+
+            R[i, i] =
+                variance_log_y
+
+            R[j, j] =
+                variance_log_one_minus_y
+
+            R[i, j] =
+                covariance_logs
+
+            R[j, i] =
+                covariance_logs
+        end
+
+        return nothing
+    end
+
+    return condMoments_beta_sufficient_grouped!
+end
+
+
+#########################
+### For no regression 
+#########################
 
 function beta_sufficient_observation_summed(
     y;
@@ -384,182 +570,6 @@ function make_beta_sufficient_statistics_adapters_averaged(
 end
 
 
-function make_beta_sufficient_statistics_adapters_grouped(
-    raw_condMean,
-    raw_condCov;
-    variance_denominator_offset::Real = 1.0,
-    mean_boundary::Real = 1e-12,
-    min_concentration::Real = 1e-10,
-    shape_floor::Real = 1e-6
-)
-
-    function beta_shapes_from_original_model(
-            param,
-            state,
-            t
-        )
-            
-            ημ =param.Z[1][t] *state[param.Zidx[1]]
-            ηκ =param.Z[2][t] *state[param.Zidx[2]]
-
-            μ =linkinv.(Ref(param.link[1]),ημ)
-            κ =linkinv.(Ref(param.link[2]),ηκ)
-
-            # Compare against old construction only for extreme sigma points
-            μ = clamp.(μ,mean_boundary,1.0 - mean_boundary)
-
-            κ = max.(κ,min_concentration)
-
-            all(isfinite, μ) ||
-                throw(DomainError(
-                    μ,
-                    "Non-finite Beta mean."
-                ))
-
-            all(isfinite, κ) ||
-                throw(DomainError(
-                    κ,
-                    "Non-finite Beta concentration."
-                ))
-
-            # Raw Beta shapes implied by the model
-            alpha_raw = μ .* κ
-            beta_raw  = (1.0 .- μ) .* κ
-
-            # Diagnostic: check when SLR sigma points approach the boundary
-            alpha_raw = μ .* κ
-            beta_raw  = (1.0 .- μ) .* κ
-
-            #if any(alpha_raw .< shape_floor) ||
-            #any(beta_raw .< shape_floor)
-
-              #  @show t
-
-               # @show extrema(ημ)
-               # @show extrema(μ)
-
-               # @show extrema(ηκ)
-                #@show extrema(κ)
-
-               # @show minimum(alpha_raw)
-               # @show minimum(beta_raw)
-            #end
-            
-            # Numerical regularization for sufficient-statistic moments
-            alpha_shape =
-                max.(
-                    alpha_raw,
-                    shape_floor
-                )
-
-            beta_shape =
-                max.(
-                    beta_raw,
-                    shape_floor
-                )
-
-            κ_effective =
-                alpha_shape .+ beta_shape
-
-            return κ_effective,
-                alpha_shape,
-                beta_shape
-        end
-
-    # ==========================================================
-    # BOTH sufficient-statistic moments in one call
-    # ==========================================================
-
-    # ==========================================================
-    # BOTH sufficient-statistic moments in one in-place call
-    # ==========================================================
-
-    function condMoments_beta_sufficient_grouped!(
-        mean_z,
-        R,
-        param,
-        state,
-        t
-    )
-
-        # Beta shapes are still constructed once per sigma point
-        κ, alpha_shape, beta_shape =
-            beta_shapes_from_original_model(
-                param,
-                state,
-                t
-            )
-
-        g = length(κ)
-
-        length(mean_z) == 2g ||
-            throw(DimensionMismatch(
-                "mean_z has length $(length(mean_z)), expected $(2g)."
-            ))
-
-        size(R) == (2g, 2g) ||
-            throw(DimensionMismatch(
-                "R has size $(size(R)), expected ($(2g), $(2g))."
-            ))
-
-        # Important because only selected entries of R are written below
-        fill!(R, zero(eltype(R)))
-
-        @inbounds for i in 1:g
-
-            j = g + i
-
-            κi = κ[i]
-            αi = alpha_shape[i]
-            βi = beta_shape[i]
-
-            # ------------------------------------------------------
-            # Conditional mean
-            # ------------------------------------------------------
-
-            digamma_κ = digamma(κi)
-
-            mean_z[i] =
-                digamma(αi) - digamma_κ
-
-            mean_z[j] =
-                digamma(βi) - digamma_κ
-
-            # ------------------------------------------------------
-            # Conditional covariance
-            # ------------------------------------------------------
-
-            trigamma_κ = trigamma(κi)
-
-            variance_log_y =
-                trigamma(αi) - trigamma_κ
-
-            variance_log_one_minus_y =
-                trigamma(βi) - trigamma_κ
-
-            covariance_logs =
-                -trigamma_κ
-
-            R[i, i] =
-                variance_log_y
-
-            R[j, j] =
-                variance_log_one_minus_y
-
-            R[i, j] =
-                covariance_logs
-
-            R[j, i] =
-                covariance_logs
-        end
-
-        return nothing
-    end
-
-    return condMoments_beta_sufficient_grouped!
-end
-
-###############################################
 function make_beta_sufficient_statistics_adapters_summed(
     raw_condMean,
     raw_condCov;
@@ -768,3 +778,97 @@ function make_beta_sufficient_statistics_adapters_summed(
     return condMoments_beta_sufficient_summed!
 end
 
+struct BetaSuffStats{F1,F2,F3} <: AbstractObsTransform
+    transform_obs::F1
+    make_cond_moments::F2
+    obs_dim::F3
+end
+
+function BetaSuffStatsGrouped(;
+    variance_denominator_offset::Real = 1.0,
+    mean_boundary::Real = 1e-12,
+    min_concentration::Real = 1e-10,
+    shape_floor::Real = 1e-6
+)
+
+    return BetaSuffStats(
+
+        # Transform raw observations
+        y -> beta_sufficient_observation_grouped(y),
+
+        # Construct conditional-moment function
+        (condMean, condCov) ->
+            make_beta_sufficient_statistics_adapters_grouped(
+                condMean,
+                condCov;
+                variance_denominator_offset =
+                    variance_denominator_offset,
+                mean_boundary =
+                    mean_boundary,
+                min_concentration =
+                    min_concentration,
+                shape_floor =
+                    shape_floor
+            ),
+
+        # Dimension of transformed observation
+        nPerGroup -> 2 * nPerGroup
+    )
+end
+
+function BetaSuffStatsAveraged(;
+    variance_denominator_offset::Real = 1.0,
+    mean_boundary::Real = 1e-12,
+    min_concentration::Real = 1e-10
+)
+
+    return BetaSuffStats(
+
+        # Transform raw observations
+        y -> beta_sufficient_observation_averaged(y),
+
+        # Construct conditional-moment function
+        (condMean, condCov) ->
+            make_beta_sufficient_statistics_adapters_averaged(
+                condMean,
+                condCov;
+                variance_denominator_offset =
+                    variance_denominator_offset,
+                mean_boundary =
+                    mean_boundary,
+                min_concentration =
+                    min_concentration
+            ),
+
+        # Averaged sufficient statistic always has dimension 2
+        nPerGroup -> 2
+    )
+end
+
+
+function prepare_observation_transform(
+    transform::BetaSuffStats,
+    Y,
+    condMean,
+    condCov,
+    nPerGroup
+)
+
+    Y_transformed = [
+        transform.transform_obs(Y[t])
+        for t in eachindex(Y)
+    ]
+
+    condMoments = transform.make_cond_moments(
+        condMean,
+        condCov
+    )
+
+    nObs = transform.obs_dim(nPerGroup)
+
+    return (
+        Y = Y_transformed,
+        condMoments = condMoments,
+        nObs = nObs
+    )
+end

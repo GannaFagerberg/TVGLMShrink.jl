@@ -74,8 +74,8 @@ f_ϕ(x) = priorparam[2] - invlink[2](x)
 κ₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
 Σ₀ = :fisherinfo # Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
 
-#link = (LogitLink(), LogLinLink()) # best so far
-link = (CauchitLink(),LogLinLink())
+link = (LogitLink(), LogLinLink()) # best so far
+#link = (CauchitLink(),LogLinLink())
 #link = (LogitLink(),WoodardLink(2.0))
 #link = (UnitHardLink(),LogLinLink()) ### distrotrs inference
 #link = (ProbitLink(),LogLinLink()) ### bad, underestimayes
@@ -121,8 +121,8 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
-    nIter=10000,              # Number of iterations in the Gibbs sampler
-    nBurn=3000,               # Number of burn-in iterations
+    nIter=1000,              # Number of iterations in the Gibbs sampler
+    nBurn=1000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility
@@ -188,19 +188,18 @@ dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
 @show modelSettings.link
 
 #Random.seed!(2)
-θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings);
+#θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings);
+θpost, groupSizes,nFailure = GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings);
+
 prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
 println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% of the simulated trajectories")
 
 # Parameter quantiles on the parameter time scale - this always includes t=0
-#plt = plot_param_path_betareg(β, γ)
+plt_reg = plot_param_path_betareg(β, γ)
 quant_paramtime_iplf = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
-PlotPostParamEvolution!(plt, quant_paramtime_iplf, "IPLF",groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=2, c=colors[2])
-
+PlotPostParamEvolution!(plt_reg, quant_paramtime_iplf, "Laplace", groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=2, c=colors[4])
 #savefig(plt_reg, joinpath(@__DIR__, "beta_reg_sim.pdf"))
-
-    
-display(plt_reg)
+#display(plt_reg)
 
 # diag - good
 # woodart in precision and others - not good, use loglin or log

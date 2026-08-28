@@ -21,9 +21,15 @@ observation(param, state, t) =
 function condCov(param, state, t)
     @views begin
         μ = linkinv.(param.link[1], param.Z[1][t] * state[param.Zidx[1]])
-        ψ = linkinv.(param.link[2], param.Z[2][t] * state[param.Zidx[2]])
+        κ = linkinv.(param.link[2], param.Z[2][t] * state[param.Zidx[2]])
+
+        μ = clamp.(μ, 1e-12, 1.0 - 1e-12)
+        κ = max.(κ, 1e-10)
+
+        variance_y = μ .* (1.0 .- μ) ./ (κ .+ 1.0)
     end
-    return diagm(μ .* (1 .- μ) ./ (1 .+ ψ))
+
+    return diagm(variance_y)
 end
 
 ## Fisher info and scaling

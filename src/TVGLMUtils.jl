@@ -237,3 +237,32 @@ function densityScores(θpost, θtrue)
     end
     return CRPS, energyScore, variogramScore
 end
+
+
+#### Observationa transform and transformed moments for IPLF
+function prepare_observation_transform(
+    transform::BetaSuffStats,
+    Y,
+    condMean,
+    condCov,
+    nPerGroup
+)
+
+    Y_transformed = [
+        transform.transform_obs(Y[t])
+        for t in eachindex(Y)
+    ]
+
+    condMoments = transform.make_cond_moments(
+        condMean,
+        condCov
+    )
+
+    nObs = transform.obs_dim(nPerGroup)
+
+    return (
+        Y = Y_transformed,
+        condMoments = condMoments,
+        nObs = nObs
+    )
+end
