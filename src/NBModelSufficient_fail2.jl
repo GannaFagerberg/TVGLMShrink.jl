@@ -1,12 +1,3 @@
-
-
-struct NBSuffStats{F1,F2,F3} <: AbstractObsTransform
-    transform_obs::F1
-    make_cond_moments::F2
-    obs_dim::F3
-end
-
-
 # ============================================================
 # Negative-binomial transformed-observation helpers
 #
@@ -19,27 +10,23 @@ end
 #
 # Observation transformation:
 #
-#     z(y) = [y, log(1+y)]
+#     z(y) = [y, 1(y = 0)]
 #
-# For a group:
+# For a group of observations:
 #
 #     z̄ =
 #     [
 #         mean(Y_i),
-#         mean(log(1 + Y_i))
+#         mean(1(Y_i = 0))
 #     ]
 #
+# Thus the second transformed observation is the
+# proportion of zeros in the group.
+#
 # This is NOT a sufficient-statistic representation.
-#
-# The first component carries direct information about μ.
-# The second component uses the whole count distribution
-# while compressing large observations, and therefore
-# provides additional information about r.
-#
-# PUBLIC/EXTERNAL NAMES ARE KEPT UNCHANGED so that the
-# existing IPLF infrastructure requires no changes.
+# It is a transformed-observation / moment construction
+# designed to provide information about both μ and r.
 # ============================================================
-
 
 struct NBSuffStats{F1,F2,F3} <: AbstractObsTransform
     transform_obs::F1
@@ -47,10 +34,6 @@ struct NBSuffStats{F1,F2,F3} <: AbstractObsTransform
     obs_dim::F3
 end
 
-
-# ============================================================
-# Helpers
-# ============================================================
 
 function _nb_vector(value, name::AbstractString)
 
@@ -110,45 +93,36 @@ end
 
 
 # ============================================================
-# Observed transformation
+# Transform observed NB data
 #
-# NAME KEPT UNCHANGED:
+# NOTE:
+# The function name is kept unchanged for compatibility with
+# the existing infrastructure.
 #
-#     nb_factorial_observation_averaged
+# Previously:
+#     [mean(Y), mean(Y(Y-1))]
 #
-# New transformation:
-#
-#     [
-#         mean(Y),
-#         mean(log(1+Y))
-#     ]
+# Now:
+#     [mean(Y), proportion of zeros]
 # ============================================================
 
 function nb_factorial_observation_averaged(
     y
 )
 
-    y_group =
-        _nb_vector(
-            y,
-            "y"
-        )
+    y_group = _nb_vector(
+        y,
+        "y"
+    )
 
-    g =
-        length(y_group)
+    g = length(y_group)
 
-    mean_y =
-        0.0
-
-    mean_log1py =
-        0.0
-
+    mean_y = 0.0
+    number_zeros = 0.0
 
     @inbounds for i in eachindex(y_group)
 
-        yi =
-            y_group[i]
-
+        yi = y_group[i]
 
         isfinite(yi) ||
             throw(DomainError(
@@ -156,13 +130,11 @@ function nb_factorial_observation_averaged(
                 "Negative-binomial observations must be finite."
             ))
 
-
         yi >= 0 ||
             throw(DomainError(
                 yi,
                 "Negative-binomial observations must be non-negative."
             ))
-
 
         isinteger(yi) ||
             throw(DomainError(
@@ -170,183 +142,24 @@ function nb_factorial_observation_averaged(
                 "Negative-binomial observations must be integer-valued."
             ))
 
+        mean_y += yi
 
-        mean_y +=
-            yi
-
-        mean_log1py +=
-            log1p(yi)
+        if yi == 0
+            number_zeros += 1.0
+        end
     end
-
 
     return [
         mean_y / g,
-        mean_log1py / g
+        number_zeros / g
     ]
 end
 
 
 # ============================================================
-# Conditional moments involving log(1+Y)
+# Construct conditional moments of transformed observation
 #
-# For Y ~ NB(μ,r), calculate numerically:
-#
-#     E[log(1+Y)]
-#
-#     E[log(1+Y)^2]
-#
-#     E[Y log(1+Y)]
-#
-# from the complete NB pmf.
-#
-# NB pmf recursion:
-#
-# P(Y=y) =
-# P(Y=y-1) *
-# ((y-1+r)/y) *
-# μ/(μ+r)
-#
-# with
-#
-# P(Y=0) = (r/(r+μ))^r.
-# ============================================================
-
-function _nb_log1p_moments(
-    μ::Real,
-    r::Real;
-    tol::Real = 1e-12,
-    maxiter::Int = 100_000
-)
-
-    μ =
-        max(
-            float(μ),
-            1e-12
-        )
-
-    r =
-        max(
-            float(r),
-            1e-10
-        )
-
-
-    # --------------------------------------------------------
-    # NB parameterisation
-    # --------------------------------------------------------
-
-    p =
-        r / (r + μ)
-
-    q =
-        μ / (r + μ)
-
-
-    # --------------------------------------------------------
-    # P(Y = 0)
-    #
-    # log formulation is more stable than p^r
-    # --------------------------------------------------------
-
-    py =
-        exp(
-            r * log(p)
-        )
-
-
-    cumulative_probability =
-        py
-
-
-    # --------------------------------------------------------
-    # Required moments
-    #
-    # At Y = 0:
-    #
-    # log(1+0) = 0,
-    #
-    # so the y=0 contribution to all three quantities is zero.
-    # --------------------------------------------------------
-
-    mean_log =
-        0.0
-
-    second_log =
-        0.0
-
-    mean_y_log =
-        0.0
-
-
-    y =
-        0
-
-
-    while (
-        max(
-            1.0 - cumulative_probability,
-            0.0
-        ) > tol
-    ) && (
-        y < maxiter
-    )
-
-        y +=
-            1
-
-
-        # ----------------------------------------------------
-        # Recursive NB pmf
-        # ----------------------------------------------------
-
-        py *=
-            ((y - 1 + r) / y) *
-            q
-
-
-        log_y =
-            log1p(y)
-
-
-        # ----------------------------------------------------
-        # Accumulate moments
-        # ----------------------------------------------------
-
-        mean_log +=
-            py *
-            log_y
-
-
-        second_log +=
-            py *
-            log_y^2
-
-
-        mean_y_log +=
-            py *
-            y *
-            log_y
-
-
-        cumulative_probability +=
-            py
-    end
-
-
-    return (
-        mean_log,
-        second_log,
-        mean_y_log
-    )
-end
-
-
-# ============================================================
-# Construct transformed conditional moments
-#
-# NAME KEPT UNCHANGED:
-#
-#     make_nb_factorial_statistics_adapters_averaged
+# Function name kept unchanged for compatibility.
 # ============================================================
 
 function make_nb_factorial_statistics_adapters_averaged(
@@ -358,25 +171,22 @@ function make_nb_factorial_statistics_adapters_averaged(
     relative_floor::Real = 1e-10
 )
 
-    # ========================================================
-    # Recover common NB parameters from original observation
-    # moments
+    # ==========================================================
+    # Recover common NB parameters from original model moments
     #
-    # raw_condMean:
+    # raw_condMean gives μ
     #
-    #     E[Y] = μ
-    #
-    # raw_condCov:
+    # raw_condCov gives
     #
     #     Var(Y) = μ + μ²/r
     #
-    # Therefore
+    # hence
     #
     #     r = μ² / (Var(Y) - μ)
     #
     # Current implementation assumes common μ and r within
-    # each group, matching the current no-regression model.
-    # ========================================================
+    # each group, as in the no-regression simulation.
+    # ==========================================================
 
     function nb_parameters_from_original_model_averaged(
         param,
@@ -391,7 +201,6 @@ function make_nb_factorial_statistics_adapters_averaged(
                 t
             )
 
-
         covariance_raw =
             raw_condCov(
                 param,
@@ -399,17 +208,13 @@ function make_nb_factorial_statistics_adapters_averaged(
                 t
             )
 
-
         μ =
             _nb_vector(
                 μ_raw,
                 "raw_condMean output"
             )
 
-
-        g =
-            length(μ)
-
+        g = length(μ)
 
         variance_y =
             _nb_variance_vector(
@@ -418,16 +223,15 @@ function make_nb_factorial_statistics_adapters_averaged(
             )
 
 
-        # ----------------------------------------------------
-        # Common state within group
-        # ----------------------------------------------------
+        # ------------------------------------------------------
+        # No-regression/common-state case
+        # ------------------------------------------------------
 
         μi =
             max(
                 μ[1],
                 min_mean
             )
-
 
         variance_i =
             variance_y[1]
@@ -449,16 +253,14 @@ function make_nb_factorial_statistics_adapters_averaged(
             ))
 
 
-        # ----------------------------------------------------
-        # Recover r
+        # ------------------------------------------------------
+        # Recover NB size parameter r
         #
         # Var(Y) - μ = μ²/r
-        # ----------------------------------------------------
+        # ------------------------------------------------------
 
         overdispersion =
-            variance_i -
-            μi
-
+            variance_i - μi
 
         overdispersion =
             max(
@@ -466,10 +268,8 @@ function make_nb_factorial_statistics_adapters_averaged(
                 min_overdispersion
             )
 
-
         r =
-            μi^2 /
-            overdispersion
+            μi^2 / overdispersion
 
 
         isfinite(r) &&
@@ -491,36 +291,33 @@ function make_nb_factorial_statistics_adapters_averaged(
     end
 
 
-    # ========================================================
-    # Conditional moments for
+    # ==========================================================
+    # Conditional moments of
     #
-    # z =
+    #        z =
+    #        [
+    #            Y
+    #            I(Y = 0)
+    #        ]
     #
-    # [
-    #     Y
-    #     log(1+Y)
-    # ]
+    # For NB(μ,r):
     #
+    # p0 = P(Y=0)
+    #    = (r/(r+μ))^r
     #
-    # E[z] =
+    # E[Y]       = μ
+    # E[I(Y=0)]  = p0
     #
-    # [
-    #     μ
-    #     E[log(1+Y)]
-    # ]
+    # Var(Y) = μ + μ²/r
     #
+    # Var(I(Y=0)) = p0(1-p0)
     #
-    # Cov(z) =
+    # Cov(Y,I(Y=0))
+    #     = E[Y I(Y=0)] - μp0
+    #     = -μp0
     #
-    # [
-    #   Var(Y)                  Cov(Y,log(1+Y))
-    #
-    #   Cov(Y,log(1+Y))         Var(log(1+Y))
-    # ]
-    #
-    # where the non-polynomial moments are evaluated using
-    # the full NB probability mass function.
-    # ========================================================
+    # since Y I(Y=0) = 0.
+    # ==========================================================
 
     function condMoments_nb_factorial_averaged!(
         mean_z,
@@ -550,76 +347,77 @@ function make_nb_factorial_statistics_adapters_averaged(
             ))
 
 
-        # ----------------------------------------------------
-        # Moments involving log(1+Y)
-        # ----------------------------------------------------
+        # ------------------------------------------------------
+        # Probability of zero
+        #
+        # Direct expression:
+        #
+        #     (r/(r+μ))^r
+        #
+        # Numerically more stable:
+        #
+        #     exp(-r * log1p(μ/r))
+        # ------------------------------------------------------
 
-        mean_log,
-        second_log,
-        mean_y_log =
-            _nb_log1p_moments(
-                μ,
-                r
+        p0 =
+            exp(
+                -r * log1p(μ / r)
             )
 
 
-        # ====================================================
-        # Conditional mean
-        # ====================================================
+        # Numerical safeguard
+        p0 =
+            clamp(
+                p0,
+                0.0,
+                1.0
+            )
+
+
+        # ======================================================
+        # Conditional mean of transformed observation
+        # ======================================================
 
         mean_z[1] =
             μ
 
-
         mean_z[2] =
-            mean_log
+            p0
 
 
-        # ====================================================
-        # Conditional covariance for ONE NB observation
-        # ====================================================
+        # ======================================================
+        # Conditional covariance for ONE observation
+        # ======================================================
 
         variance_y =
             μ +
             μ^2 / r
 
 
-        variance_log =
-            second_log -
-            mean_log^2
+        covariance_y_zero =
+            -μ * p0
 
 
-        covariance_y_log =
-            mean_y_log -
-            μ *
-            mean_log
+        variance_zero =
+            p0 *
+            (1.0 - p0)
 
 
-        # Numerical protection against tiny negative
-        # round-off in Var(log(1+Y)).
-        variance_log =
-            max(
-                variance_log,
-                0.0
-            )
-
-
-        # ====================================================
-        # Covariance of group AVERAGE
+        # ======================================================
+        # Covariance of GROUP AVERAGE
         #
-        # For conditionally iid observations:
+        # If observations are conditionally independent and
+        # share the same μ,r:
         #
-        # Var(z̄) = Var(z) / g
-        # ====================================================
+        # Var(z̄) = Var(z)/g
+        # ======================================================
 
         R[1, 1] =
-            variance_y /
-            g
+            variance_y / g
 
 
         R[1, 2] =
-            covariance_y_log /
-            g
+            covariance_y_zero / g
 
 
         R[2, 1] =
@@ -627,19 +425,17 @@ function make_nb_factorial_statistics_adapters_averaged(
 
 
         R[2, 2] =
-            variance_log /
-            g
+            variance_zero / g
 
 
-        # ----------------------------------------------------
-        # SPD protection
-        # ----------------------------------------------------
+        # ------------------------------------------------------
+        # Numerical safeguard
+        # ------------------------------------------------------
 
-        R .=
-            _make_spd(
-                R;
-                relative_floor = relative_floor
-            )
+        R .= _make_spd(
+            R;
+            relative_floor = relative_floor
+        )
 
 
         return nothing
@@ -651,9 +447,14 @@ end
 
 
 # ============================================================
-# Observation-transform type
+# Observation-transform object
 #
-# NAME KEPT UNCHANGED.
+# NAME KEPT UNCHANGED so existing scripts continue working:
+#
+#     NBFactorialStatsAveraged()
+#
+# despite the fact that the new transformation is no longer
+# factorial-moment based.
 # ============================================================
 
 struct NBFactorialStats{F1,F2,F3} <: AbstractObsTransform
@@ -665,14 +466,6 @@ struct NBFactorialStats{F1,F2,F3} <: AbstractObsTransform
 end
 
 
-# ============================================================
-# Constructor
-#
-# NAME AND ARGUMENTS KEPT UNCHANGED:
-#
-#     NBFactorialStatsAveraged()
-# ============================================================
-
 function NBFactorialStatsAveraged(;
     min_mean::Real = 1e-10,
     min_dispersion::Real = 1e-8,
@@ -682,14 +475,11 @@ function NBFactorialStatsAveraged(;
 
     return NBFactorialStats(
 
-        # ----------------------------------------------------
-        # Observed transformation
+        # ------------------------------------------------------
+        # Observation transformation
         #
-        # [
-        #     mean(Y),
-        #     mean(log(1+Y))
-        # ]
-        # ----------------------------------------------------
+        # y -> [mean(y), proportion_zero(y)]
+        # ------------------------------------------------------
 
         y ->
             nb_factorial_observation_averaged(
@@ -697,9 +487,9 @@ function NBFactorialStatsAveraged(;
             ),
 
 
-        # ----------------------------------------------------
-        # Conditional transformed moments
-        # ----------------------------------------------------
+        # ------------------------------------------------------
+        # Conditional moments
+        # ------------------------------------------------------
 
         (condMean, condCov) ->
             make_nb_factorial_statistics_adapters_averaged(
@@ -712,9 +502,9 @@ function NBFactorialStatsAveraged(;
             ),
 
 
-        # ----------------------------------------------------
-        # Observation dimension remains 2
-        # ----------------------------------------------------
+        # ------------------------------------------------------
+        # Transformed observation dimension
+        # ------------------------------------------------------
 
         nPerGroup -> 2
     )
@@ -722,9 +512,9 @@ end
 
 
 # ============================================================
-# Prepare observation transformation
+# Prepare transformed observations for SLR/IPLF
 #
-# INTERFACE UNCHANGED.
+# Interface unchanged.
 # ============================================================
 
 function prepare_observation_transform(
@@ -761,9 +551,7 @@ function prepare_observation_transform(
     )
 end
 
-############
 ### Fisher
-############
 
 function fisher_nb_size(
     μ,

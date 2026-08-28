@@ -659,7 +659,8 @@ function kalmanfilter_update_transformed_IPLF(
         #mu_updated[precision_idx] .= max.(mu_updated[precision_idx],precision_floor)
 
         idx = [1, 2]
-        parameter_floor = 0.1^3
+        #parameter_floor = 0.1^3
+        parameter_floor = -3.0
         #hit_floor = any(mu_updated[idx] .< parameter_floor)
         #if hit_floor
             #@show t iteration mu_updated[idx]
