@@ -30,191 +30,43 @@ function _gamma_vector(value, name::AbstractString)
     end
 end
 
+function _gamma_variance_vector(value, group_size::Int)
 
-# ============================================================
-# Extract one state component for the no-regression case
-# ============================================================
+    if value isa Real
 
-function _gamma_single_state(state, idx, name::AbstractString)
-
-    if idx isa Integer
-        return state[idx]
-    end
-
-    values = state[idx]
-
-    length(values) == 1 ||
-        throw(DimensionMismatch(
-            "$name has $(length(values)) state components; " *
-            "the no-regression Gamma helper expects exactly one."
+        group_size == 1 || throw(DimensionMismatch(
+            "A scalar variance was returned for group size $group_size."
         ))
 
-    return only(values)
-end
+        return [float(value)]
 
+    elseif value isa AbstractVector
 
-# ============================================================
-# Gamma parameters from state
-#
-# No regression:
-#
-# η_μ = single mean state
-# η_κ = single precision state
-#
-# μ = linkinv(mean link, η_μ)
-# κ = linkinv(precision link, η_κ)
-# ============================================================
-
-function _gamma_parameters_noregression(
-    param,
-    state;
-    min_mean::Real = 1e-10,
-    min_precision::Real = 1e-10
-)
-
-    ημ = _gamma_single_state(
-        state,
-        param.Zidx[1],
-        "Gamma mean predictor"
-    )
-
-    ηκ = _gamma_single_state(
-        state,
-        param.Zidx[2],
-        "Gamma precision predictor"
-    )
-
-    μ = linkinv(
-        param.link[1],
-        ημ
-    )
-
-    κ = linkinv(
-        param.link[2],
-        ηκ
-    )
-
-    isfinite(μ) ||
-        throw(DomainError(
-            μ,
-            "Non-finite Gamma mean."
+        length(value) == group_size || throw(DimensionMismatch(
+            "Variance vector has length $(length(value)); " *
+            "expected $group_size."
         ))
 
-    isfinite(κ) ||
-        throw(DomainError(
-            κ,
-            "Non-finite Gamma precision."
-        ))
+        return vec(float.(value))
 
-    μ = max(
-        μ,
-        min_mean
-    )
+    elseif value isa AbstractMatrix
 
-    κ = max(
-        κ,
-        min_precision
-    )
-
-    return μ, κ
-end
-
-function gamma_sufficient_observation_grouped(
-    y;
-    clip::Bool = false,
-    boundary::Real = 1e-12
-)
-
-    y_group = _gamma_vector(
-        y,
-        "y"
-    )
-
-    g = length(y_group)
-
-    z = Vector{Float64}(
-        undef,
-        2 * g
-    )
-
-    @inbounds for i in 1:g
-
-        yi = y_group[i]
-
-        isfinite(yi) ||
-            throw(DomainError(
-                yi,
-                "Gamma observations must be finite."
+        size(value) == (group_size, group_size) ||
+            throw(DimensionMismatch(
+                "Conditional covariance has size $(size(value)); " *
+                "expected ($group_size, $group_size)."
             ))
 
-        if yi <= 0
-            if clip
-                yi = max(
-                    yi,
-                    boundary
-                )
-            else
-                throw(DomainError(
-                    yi,
-                    "Gamma observations must be strictly positive."
-                ))
-            end
-        end
+        return float.(diag(value))
 
-        z[i]     = log(yi)
-        z[g + i] = yi
+    else
+
+        throw(ArgumentError(
+            "Unsupported conditional covariance type $(typeof(value))."
+        ))
     end
-
-    return z
 end
 
-function gamma_sufficient_observation_summed(
-    y;
-    clip::Bool = false,
-    boundary::Real = 1e-12
-)
-
-    y_group = _gamma_vector(
-        y,
-        "y"
-    )
-
-    sum_log_y = 0.0
-    sum_y     = 0.0
-
-    @inbounds for i in eachindex(y_group)
-
-        yi = y_group[i]
-
-        isfinite(yi) ||
-            throw(DomainError(
-                yi,
-                "Gamma observations must be finite."
-            ))
-
-        if yi <= 0
-            if clip
-                yi = max(
-                    yi,
-                    boundary
-                )
-            else
-                throw(DomainError(
-                    yi,
-                    "Gamma observations must be strictly positive."
-                ))
-            end
-        end
-
-        sum_log_y += log(yi)
-        sum_y     += yi
-    end
-
-    return [
-        sum_log_y,
-        sum_y
-    ]
-end
 
 function gamma_sufficient_observation_averaged(
     y;
@@ -266,114 +118,85 @@ function gamma_sufficient_observation_averaged(
     ]
 end
 
-function make_gamma_sufficient_statistics_adapter_grouped_noregression(
-    group_size::Integer;
+
+function make_gamma_sufficient_statistics_adapters_averaged(
+    raw_condMean,
+    raw_condCov;
     min_mean::Real = 1e-10,
     min_precision::Real = 1e-10
 )
 
-    g = Int(group_size)
+    # ==========================================================
+    # Recover common Gamma parameters from raw observation moments
+    # ==========================================================
 
-    g > 0 ||
-        throw(ArgumentError(
-            "group_size must be positive."
-        ))
-
-    function condMoments_gamma_sufficient_grouped!(
-        mean_z,
-        R,
+    function gamma_parameters_from_original_model_averaged(
         param,
         state,
         t
     )
 
-        μ, κ =
-            _gamma_parameters_noregression(
-                param,
-                state;
-                min_mean = min_mean,
-                min_precision = min_precision
-            )
+        μ_raw =raw_condMean(param,state,t)
 
-        length(mean_z) == 2g ||
-            throw(DimensionMismatch(
-                "mean_z has length $(length(mean_z)), expected $(2g)."
-            ))
+        covariance_raw =raw_condCov(param,state,t)
 
-        size(R) == (2g, 2g) ||
-            throw(DimensionMismatch(
-                "R has size $(size(R)), expected ($(2g), $(2g))."
-            ))
-
-        fill!(
-            R,
-            zero(eltype(R))
+        μ = _gamma_vector(
+            μ_raw,
+            "raw_condMean output"
         )
 
-        # ------------------------------------------------------
-        # Moments for a single Gamma observation
-        # ------------------------------------------------------
+        g = length(μ)
 
-        mean_log_y =
-            digamma(κ) +
-            log(μ) -
-            log(κ)
+        variance_y =_gamma_variance_vector(covariance_raw,g)
 
-        variance_log_y =
-            trigamma(κ)
+        # No-regression case:
+        # all observations in the group share the same μ and κ
+        μi =max(μ[1],min_mean)
 
-        variance_y =
-            μ^2 / κ
+        variance_i =
+            variance_y[1]
 
-        covariance_logy_y =
-            μ / κ
+        isfinite(μi) &&
+            μi > 0 ||
+            throw(DomainError(
+                μi,
+                "Conditional Gamma mean must be finite and positive."
+            ))
 
-        # ------------------------------------------------------
-        # Same μ and κ for all observations in the group
-        #
-        # z =
-        # [
-        #   log(y₁), ..., log(y_g),
-        #   y₁,      ..., y_g
-        # ]
-        # ------------------------------------------------------
+        isfinite(variance_i) &&
+            variance_i > 0 ||
+            throw(DomainError(
+                variance_i,
+                "Conditional Gamma variance must be finite and positive."
+            ))
 
-        @inbounds for i in 1:g
+        # Var(Y|x) = μ² / κ
+        κ =μi^2 / variance_i
 
-            j = g + i
+        isfinite(κ) &&
+            κ > 0 ||
+            throw(DomainError(
+                κ,
+                "The conditional moments imply non-positive Gamma precision."
+            ))
 
-            mean_z[i] =
-                mean_log_y
+        κ =max(κ,min_precision)
 
-            mean_z[j] =
-                μ
-
-            R[i, i] =
-                variance_log_y
-
-            R[j, j] =
-                variance_y
-
-            R[i, j] =
-                covariance_logy_y
-
-            R[j, i] =
-                covariance_logy_y
-        end
-
-        return nothing
+        return μi, κ, g
     end
 
-    return condMoments_gamma_sufficient_grouped!
-end
 
-function make_gamma_sufficient_statistics_adapter_averaged_noregression(
-    group_size::Integer;
-    min_mean::Real = 1e-10,
-    min_precision::Real = 1e-10
-)
-
-    g = Int(group_size)
+    # ==========================================================
+    # Averaged sufficient-statistic moments
+    #
+    # z_bar =
+    # [
+    #   (1/g) sum_i log(y_i),
+    #   (1/g) sum_i y_i
+    # ]
+    #
+    # Dimension is always 2.
+    # ==========================================================
 
     function condMoments_gamma_sufficient_averaged!(
         mean_z,
@@ -383,12 +206,11 @@ function make_gamma_sufficient_statistics_adapter_averaged_noregression(
         t
     )
 
-        μ, κ =
-            _gamma_parameters_noregression(
+        μ, κ, g =
+            gamma_parameters_from_original_model_averaged(
                 param,
-                state;
-                min_mean = min_mean,
-                min_precision = min_precision
+                state,
+                t
             )
 
         length(mean_z) == 2 ||
@@ -401,25 +223,30 @@ function make_gamma_sufficient_statistics_adapter_averaged_noregression(
                 "R has size $(size(R)), expected (2, 2)."
             ))
 
-        mean_z[1] =
-            digamma(κ) +
-            log(μ) -
-            log(κ)
+        # ------------------------------------------------------
+        # Conditional mean
+        # ------------------------------------------------------
 
-        mean_z[2] =
-            μ
+        mean_z[1] =digamma(κ) +log(μ) -log(κ)
+        mean_z[2] =μ
 
-        R[1, 1] =
-            trigamma(κ) / g
+        # ------------------------------------------------------
+        # Conditional covariance of the average
+        # ------------------------------------------------------
 
-        R[2, 2] =
-            (μ^2 / κ) / g
+        R[1, 1] =trigamma(κ) / g
 
-        R[1, 2] =
-            (μ / κ) / g
+        R[2, 2] =(μ^2 / κ) / g
 
-        R[2, 1] =
-            R[1, 2]
+        R[1, 2] =(μ / κ) / g
+
+        R[2, 1] = R[1, 2]
+
+        # Numerical SPD safeguard
+        R .= _make_spd(
+            R;
+            relative_floor = 1e-10
+        )
 
         return nothing
     end
@@ -427,65 +254,138 @@ function make_gamma_sufficient_statistics_adapter_averaged_noregression(
     return condMoments_gamma_sufficient_averaged!
 end
 
-function make_gamma_sufficient_statistics_adapter_summed_noregression(
-    group_size::Integer;
+
+struct GammaSuffStats{F1,F2,F3} <: AbstractObsTransform
+    transform_obs::F1
+    make_cond_moments::F2
+    obs_dim::F3
+end
+
+function GammaSuffStatsAveraged(;
+    clip::Bool = false,
+    boundary::Real = 1e-12,
     min_mean::Real = 1e-10,
     min_precision::Real = 1e-10
 )
 
-    g = Int(group_size)
+    return GammaSuffStats(
 
-    function condMoments_gamma_sufficient_summed!(
-        mean_z,
-        R,
-        param,
-        state,
-        t
-    )
+        # Observation transformation
+        y ->
+            gamma_sufficient_observation_averaged(
+                y;
+                clip = clip,
+                boundary = boundary
+            ),
 
-        μ, κ =
-            _gamma_parameters_noregression(
-                param,
-                state;
+        # Conditional moments of transformed observation
+        (condMean, condCov) ->
+            make_gamma_sufficient_statistics_adapters_averaged(
+                condMean,
+                condCov;
                 min_mean = min_mean,
                 min_precision = min_precision
-            )
+            ),
 
-        length(mean_z) == 2 ||
-            throw(DimensionMismatch(
-                "mean_z has length $(length(mean_z)), expected 2."
-            ))
-
-        size(R) == (2, 2) ||
-            throw(DimensionMismatch(
-                "R has size $(size(R)), expected (2, 2)."
-            ))
-
-        mean_log_y =
-            digamma(κ) +
-            log(μ) -
-            log(κ)
-
-        mean_z[1] =
-            g * mean_log_y
-
-        mean_z[2] =
-            g * μ
-
-        R[1, 1] =
-            g * trigamma(κ)
-
-        R[2, 2] =
-            g * μ^2 / κ
-
-        R[1, 2] =
-            g * μ / κ
-
-        R[2, 1] =
-            R[1, 2]
-
-        return nothing
-    end
-
-    return condMoments_gamma_sufficient_summed!
+        # Dimension of transformed observation
+        nPerGroup -> 2
+    )
 end
+
+function prepare_observation_transform(
+    transform::GammaSuffStats,
+    Y,
+    condMean,
+    condCov,
+    nPerGroup
+)
+
+    Y_transformed = [
+        transform.transform_obs(Y[t])
+        for t in eachindex(Y)
+    ]
+
+    condMoments =
+        transform.make_cond_moments(
+            condMean,
+            condCov
+        )
+
+    nObs =
+        transform.obs_dim(
+            nPerGroup
+        )
+
+    return (
+        Y = Y_transformed,
+        condMoments = condMoments,
+        nObs = nObs
+    )
+end
+
+function fisher_gamma_blocks(
+    Xμ,
+    Xκ,
+    βμ,
+    βκ,
+    linkμ,
+    linkκ
+)
+
+    # Linear predictors
+    ημ = Xμ * βμ
+    ηκ = Xκ * βκ
+
+    ημ = clamp.(ημ, -20.0, 20.0)
+    ηκ = clamp.(ηκ, -20.0, 20.0)
+
+    # Gamma mean and precision
+    μ = linkinv.(Ref(linkμ), ημ)
+    κ = linkinv.(Ref(linkκ), ηκ)
+
+    μ = max.(μ, 1e-8)
+    κ = max.(κ, 1e-3)
+
+    # Derivatives dμ/dημ and dκ/dηκ
+    dμ = mueta.(Ref(linkμ), ημ)
+    dκ = mueta.(Ref(linkκ), ηκ)
+
+    # Fisher weights on predictor scale
+    wμ =(κ ./ μ.^2) .* dμ.^2
+
+    wκ =(trigamma.(κ) .- 1.0 ./ κ) .* dκ.^2
+
+    # Mean and precision are Fisher-orthogonal
+    Fμμ =Xμ' * Diagonal(vec(wμ)) * Xμ
+
+    Fκκ =Xκ' * Diagonal(vec(wκ)) * Xκ
+
+    p = size(Xμ, 2)
+    q = size(Xκ, 2)
+
+    F = zeros(
+        promote_type(eltype(Fμμ), eltype(Fκκ)),
+        p + q,
+        p + q
+    )
+
+    F[1:p, 1:p] .= Fμμ
+    F[(p + 1):(p + q), (p + 1):(p + q)] .= Fκκ
+
+    return F
+end
+
+function FisherInfoGamma(param, μ, t)
+
+    p = size(param.X[1], 2)
+
+    return fisher_gamma_blocks(
+        param.X[1],
+        param.X[2],
+        μ[1:p],
+        μ[(p + 1):end],
+        param.link[1],
+        param.link[2]
+    )
+end
+

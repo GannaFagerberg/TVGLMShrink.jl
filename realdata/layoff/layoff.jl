@@ -123,7 +123,7 @@ dateVec = 1:T
 keep_t0 = false # Whether to keep the state at time t=0 in the output of the Gibbs sampler
 results = []
 interpMethod = :linear
-scaling = :none
+scaling = :diag
 nPerGroup = 5
 
 

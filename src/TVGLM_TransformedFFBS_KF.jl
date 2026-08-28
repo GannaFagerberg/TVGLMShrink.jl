@@ -288,9 +288,7 @@ function FFBS_SLR_transformed!(
             Σₙ
         end
 
-        Σₙt = Hermitian(
-            Matrix(Σₙ_raw) + eps(Float64) * I
-        )
+        Σₙt = Hermitian(Matrix(Σₙ_raw) + eps(Float64) * I)
 
         # Always keep the control input as a vector.
         u = @view U[t, :]
@@ -605,7 +603,7 @@ function kalmanfilter_update_transformed_IPLF(
         #H_k = P_xz' / Omega_iter
         H_k = (F_iter \ P_xz)'
         b_k = z_mean - H_k * mu_iter
-        #R_k = _make_spd(P_z - H_k * Omega_iter * H_k';relative_floor = covariance_floor,)
+        R_k = _make_spd(P_z - H_k * Omega_iter * H_k';relative_floor = covariance_floor,)
         #R_k = P_z - H_k * Omega_iter * H_k'
 
         # ----------------------------------------------------------
@@ -617,15 +615,15 @@ function kalmanfilter_update_transformed_IPLF(
         #       (m(x)-z_mean-H_k(x-mu_iter))']
         # ----------------------------------------------------------
 
-        R_k = copy(mean_conditional_covariance)
+        #R_k = copy(mean_conditional_covariance)
 
-        for j in 1:number_of_points
+        #for j in 1:number_of_points
 
-           residual_j =
-               @view(centered_means[:, j]) -
-               H_k * @view(centered_states[:, j])
-               R_k .+= w_cov[j] .* (residual_j * residual_j')
-        end
+           #residual_j =
+              # @view(centered_means[:, j]) -
+              # H_k * @view(centered_states[:, j])
+              # R_k .+= w_cov[j] .* (residual_j * residual_j')
+        #end
 
         # ======================================================
         # Kalman update
@@ -656,25 +654,36 @@ function kalmanfilter_update_transformed_IPLF(
         mu_updated =mu_prior + gain * (z_vec - z_prior_mean)
 
         # OBS! Project precision state back to its admissible domain
-        precision_idx = param.Zidx[2]
-        precision_floor = -3.0
+        #precision_idx = param.Zidx[2]
+        #precision_floor = -3.0
+        #mu_updated[precision_idx] .= max.(mu_updated[precision_idx],precision_floor)
 
-        mu_updated[precision_idx] .=
-        max.(
-            mu_updated[precision_idx],
-            precision_floor
-        )
+        idx = [1, 2]
+        parameter_floor = 0.1^3
+        #hit_floor = any(mu_updated[idx] .< parameter_floor)
+        #if hit_floor
+            #@show t iteration mu_updated[idx]
+        #end
+
+        mu_updated[idx] .= max.(mu_updated[idx], parameter_floor)
 
         ### Wihtout Joseph
-        #Omega_updated = _make_spd(Omega_prior -gain * innovation_covariance * gain';relative_floor = covariance_floor,)
+        #Omega_updated = _make_spd(Omega_prior - gain * innovation_covariance * gain';relative_floor = covariance_floor,)
         #Omega_updated = Omega_prior -gain * innovation_covariance * gain'
 
         # With Joseph
         n_state = length(mu_prior)
-        I_n = Matrix{Float64}(I, n_state, n_state)
+        I_n = Matrix{eltype(Omega_prior)}(I, n_state, n_state)
         I_KH = I_n - gain * H_k
-        Omega_updated =I_KH * Omega_prior * I_KH' + gain * R_k * gain'
-        Omega_updated = (Omega_updated + Omega_updated') / 2
+        
+        Omega_updated =
+            I_KH * Omega_prior * I_KH' +
+            gain * R_k * gain'
+
+        Omega_updated = _make_spd(
+            Omega_updated;
+            relative_floor = covariance_floor,
+        )
 
         # ======================================================
         # IPLF convergence
@@ -703,6 +712,23 @@ function kalmanfilter_update_transformed_IPLF(
 
         mu_iter = mu_updated
         Omega_iter = Omega_updated
+
+        #damping = 0.3
+        #mu_next =
+            #(1 - damping) .* mu_iter +
+            #damping .* mu_updated
+
+        #Omega_next =
+            #(1 - damping) .* Omega_iter +
+           #damping .* Omega_updated
+
+        #Omega_next = _make_spd(
+            #Omega_next;
+           #relative_floor = covariance_floor,
+        #)
+
+        #mu_iter = mu_next
+        #Omega_iter = Omega_next
 
         distance < tol && break
     end

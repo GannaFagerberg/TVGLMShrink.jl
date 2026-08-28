@@ -193,7 +193,7 @@ plt_iplf_combined = plot(
 
 savefig(
     plt_iplf_combined,
-    joinpath(save_dir, "IPLF_layoff_noscaling_standardised_stability.pdf")
+    joinpath(save_dir, "IPLF_layoff_diagscaling_standardised_stability.pdf")
 )
 
 serialize(

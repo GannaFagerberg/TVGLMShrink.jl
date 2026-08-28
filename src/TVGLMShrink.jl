@@ -18,11 +18,15 @@ using Roots: find_zero
 include("TVGLM_TransformedFFBS_KF.jl")
 include("TVGLM_Gibbs.jl")
 include("BetaModelSufficient.jl")
+include("GammaModelSufficient.jl")
+include("NBModelSufficient.jl")
 
 export FFBS_SLR_transformed!, FFBS_SLR_transformed_scaling!!, GibbsTVGLM
-
 export BetaSuffStats, BetaSuffStatsGrouped, BetaSuffStatsAveraged, prepare_observation_transform
 export prepare_observation_transform
+export GammaSuffStatsAveraged
+export fisher_gamma_blocks, FisherInfoGamma
+export fisher_nb_blocks, FisherInfoNB, NBFactorialStatsAveraged
 
 include("TVGLMPlots.jl")
 export PlotPostParamEvolution, PlotPostParamEvolution!, postPredCheckDistr
