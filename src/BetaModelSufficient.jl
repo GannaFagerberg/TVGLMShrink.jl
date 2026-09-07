@@ -872,3 +872,163 @@ function prepare_observation_transform(
         nObs = nObs
     )
 end
+
+#### Beta sufficient scaling
+
+function BetaSingleSuffStatGrouped(
+    stat::Symbol;
+    mean_boundary::Real = 1e-12,
+    min_concentration::Real = 1e-10,
+    shape_floor::Real = 1e-6
+)
+
+    stat in (:logy, :log1my) ||
+        throw(ArgumentError(
+            "stat must be :logy or :log1my"
+        ))
+
+    # ------------------------------------------------------------
+    # Transform the actual observations
+    # ------------------------------------------------------------
+    transform_obs = function(y)
+
+        # Reuse your existing function, including all checks
+        z_both = beta_sufficient_observation_grouped(y)
+
+        g = length(z_both) ÷ 2
+
+        if stat === :logy
+            return z_both[1:g]
+        else
+            return z_both[(g+1):(2g)]
+        end
+    end
+
+
+    # ------------------------------------------------------------
+    # Conditional moments used by SLR
+    # ------------------------------------------------------------
+    make_cond_moments = function(condMean, condCov)
+
+        function condMoments_beta_single_grouped!(
+            mean_z,
+            R,
+            param,
+            state,
+            t
+        )
+
+            # Linear predictors
+            ημ =
+                param.Z[1][t] *
+                state[param.Zidx[1]]
+
+            ηκ =
+                param.Z[2][t] *
+                state[param.Zidx[2]]
+
+            # Mean and concentration
+            μ =
+                linkinv.(
+                    Ref(param.link[1]),
+                    ημ
+                )
+
+            κ =
+                linkinv.(
+                    Ref(param.link[2]),
+                    ηκ
+                )
+
+            μ = clamp.(
+                μ,
+                mean_boundary,
+                1.0 - mean_boundary
+            )
+
+            κ = max.(
+                κ,
+                min_concentration
+            )
+
+            # Beta shapes
+            α =
+                max.(
+                    μ .* κ,
+                    shape_floor
+                )
+
+            β =
+                max.(
+                    (1.0 .- μ) .* κ,
+                    shape_floor
+                )
+
+            # Effective concentration after numerical flooring
+            κ_eff = α .+ β
+
+            g = length(κ_eff)
+
+            length(mean_z) == g ||
+                throw(DimensionMismatch(
+                    "mean_z has length $(length(mean_z)); expected $g."
+                ))
+
+            size(R) == (g, g) ||
+                throw(DimensionMismatch(
+                    "R has size $(size(R)); expected ($g,$g)."
+                ))
+
+            # Conditional independence across observations
+            fill!(R, zero(eltype(R)))
+
+            # ----------------------------------------------------
+            # z = log(y)
+            # ----------------------------------------------------
+            if stat === :logy
+
+                @inbounds for i in 1:g
+
+                    mean_z[i] =
+                        digamma(α[i]) -
+                        digamma(κ_eff[i])
+
+                    R[i, i] =
+                        trigamma(α[i]) -
+                        trigamma(κ_eff[i])
+                end
+
+            # ----------------------------------------------------
+            # z = log(1-y)
+            # ----------------------------------------------------
+            else
+
+                @inbounds for i in 1:g
+
+                    mean_z[i] =
+                        digamma(β[i]) -
+                        digamma(κ_eff[i])
+
+                    R[i, i] =
+                        trigamma(β[i]) -
+                        trigamma(κ_eff[i])
+                end
+            end
+
+            return nothing
+        end
+
+        return condMoments_beta_single_grouped!
+    end
+
+
+    # ------------------------------------------------------------
+    # Return same type used by your existing infrastructure
+    # ------------------------------------------------------------
+    return BetaSuffStats(
+        transform_obs,
+        make_cond_moments,
+        nPerGroup -> nPerGroup
+    )
+end
+

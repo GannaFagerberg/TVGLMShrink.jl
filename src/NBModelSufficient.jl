@@ -1,11 +1,5 @@
 
 
-struct NBSuffStats{F1,F2,F3} <: AbstractObsTransform
-    transform_obs::F1
-    make_cond_moments::F2
-    obs_dim::F3
-end
-
 
 # ============================================================
 # Negative-binomial transformed-observation helpers
@@ -41,12 +35,40 @@ end
 # ============================================================
 
 
+const NB_LOG1P_CACHE =
+    Dict{Tuple{Float64,Float64}, NTuple{3,Float64}}()
+
+function _nb_log1p_moments_cached(
+    μ::Real,
+    r::Real;
+    digits::Int = 2 #3
+)
+
+    μsafe = max(float(μ), 1e-12)
+    rsafe = max(float(r), 1e-12)
+
+    # Cache on log-parameter scale
+    key = (
+        round(log(μsafe), digits = digits),
+        round(log(rsafe), digits = digits)
+    )
+
+    return get!(NB_LOG1P_CACHE, key) do
+
+        _nb_log1p_moments(
+            μsafe,
+            rsafe;
+            tol = 1e-8,
+            maxiter = 10_000
+        )
+    end
+end
+
 struct NBSuffStats{F1,F2,F3} <: AbstractObsTransform
     transform_obs::F1
     make_cond_moments::F2
     obs_dim::F3
 end
-
 
 # ============================================================
 # Helpers
@@ -214,8 +236,8 @@ end
 function _nb_log1p_moments(
     μ::Real,
     r::Real;
-    tol::Real = 1e-12,
-    maxiter::Int = 100_000
+    tol::Real = 1e-8,
+    maxiter::Int = 10_000
 )
 
     μ =
@@ -651,21 +673,6 @@ end
 
 
 # ============================================================
-# Observation-transform type
-#
-# NAME KEPT UNCHANGED.
-# ============================================================
-
-struct NBFactorialStats{F1,F2,F3} <: AbstractObsTransform
-
-    transform_obs::F1
-    make_cond_moments::F2
-    obs_dim::F3
-
-end
-
-
-# ============================================================
 # Constructor
 #
 # NAME AND ARGUMENTS KEPT UNCHANGED:
@@ -680,43 +687,20 @@ function NBFactorialStatsAveraged(;
     relative_floor::Real = 1e-10
 )
 
-    return NBFactorialStats(
+    return NBSuffStats(
+    y -> nb_factorial_observation_averaged(y),
 
-        # ----------------------------------------------------
-        # Observed transformation
-        #
-        # [
-        #     mean(Y),
-        #     mean(log(1+Y))
-        # ]
-        # ----------------------------------------------------
+    (condMean, condCov) ->
+        make_nb_factorial_statistics_adapters_averaged(
+            condMean,
+            condCov;
+            min_mean = min_mean,
+            min_dispersion = min_dispersion,
+            min_overdispersion = min_overdispersion,
+            relative_floor = relative_floor
+        ),
 
-        y ->
-            nb_factorial_observation_averaged(
-                y
-            ),
-
-
-        # ----------------------------------------------------
-        # Conditional transformed moments
-        # ----------------------------------------------------
-
-        (condMean, condCov) ->
-            make_nb_factorial_statistics_adapters_averaged(
-                condMean,
-                condCov;
-                min_mean = min_mean,
-                min_dispersion = min_dispersion,
-                min_overdispersion = min_overdispersion,
-                relative_floor = relative_floor
-            ),
-
-
-        # ----------------------------------------------------
-        # Observation dimension remains 2
-        # ----------------------------------------------------
-
-        nPerGroup -> 2
+    nPerGroup -> 2
     )
 end
 
@@ -728,7 +712,7 @@ end
 # ============================================================
 
 function prepare_observation_transform(
-    transform::NBFactorialStats,
+    transform::NBSuffStats,
     Y,
     condMean,
     condCov,
@@ -906,5 +890,273 @@ function FisherInfoNB(param, μ, t)
         μ[(pm + 1):end],
         param.link[1],
         param.link[2]
+    )
+end
+
+
+# ============================================================
+# GROUPED / REGRESSION VERSION
+#
+# Transform:
+#
+# z =
+# [
+#   Y_1, ..., Y_g,
+#   log(1+Y_1), ..., log(1+Y_g)
+# ]
+#
+# Dimension = 2g
+# ============================================================
+
+function nb_factorial_observation_grouped(y)
+
+    y_group = _nb_vector(y, "y")
+    g = length(y_group)
+
+    z = Vector{Float64}(undef, 2g)
+
+    @inbounds for i in 1:g
+
+        yi = y_group[i]
+
+        z[i] = yi
+        z[g + i] = log1p(yi)
+    end
+
+    return z
+end
+
+# ============================================================
+# Conditional moments for grouped observations
+# ============================================================
+function make_nb_factorial_statistics_adapters_grouped(
+    raw_condMean,
+    raw_condCov;
+    min_mean::Real = 1e-10,
+    min_dispersion::Real = 1e-8,
+    relative_floor::Real = 1e-10
+)
+
+    function condMoments_nb_grouped!(
+        mean_z,
+        R,
+        param,
+        state,
+        t
+    )
+
+        # ----------------------------------------------------
+        # Construct μ_i and r_i DIRECTLY from the model state
+        # ----------------------------------------------------
+
+        ημ =
+            param.Z[1][t] *
+            state[param.Zidx[1]]
+
+        ηr =
+            param.Z[2][t] *
+            state[param.Zidx[2]]
+
+        μ =
+            linkinv.(
+                Ref(param.link[1]),
+                ημ
+            )
+
+        r =
+            linkinv.(
+                Ref(param.link[2]),
+                ηr
+            )
+
+        μ = _nb_vector(
+            μ,
+            "NB mean"
+        )
+
+        r = _nb_vector(
+            r,
+            "NB size"
+        )
+
+        g = length(μ)
+
+        # Precision may be intercept-only, in which case
+        # repeat the common r across observations.
+        if length(r) == 1 && g > 1
+            r = fill(r[1], g)
+        end
+
+        length(r) == g ||
+            throw(DimensionMismatch(
+                "length(μ)=$g but length(r)=$(length(r))."
+            ))
+
+        μ = max.(μ, min_mean)
+        r = max.(r, min_dispersion)
+
+        length(mean_z) == 2g ||
+            throw(DimensionMismatch(
+                "mean_z length $(length(mean_z)); expected $(2g)."
+            ))
+
+        size(R) == (2g, 2g) ||
+            throw(DimensionMismatch(
+                "R size $(size(R)); expected ($(2g),$(2g))."
+            ))
+
+        fill!(R, 0.0)
+
+        # ----------------------------------------------------
+        # One [Y_i, log(1+Y_i)] block per observation
+        # ----------------------------------------------------
+
+
+    ##################LOOOPP
+        @inbounds for i in 1:g
+
+            μi = μ[i]
+            ri = r[i]
+
+            # --------------------------------------------------------
+            # Cached numerical NB moments
+            # --------------------------------------------------------
+
+            mean_log,
+            second_log,
+            mean_y_log =
+                _nb_log1p_moments_cached(
+                    μi,
+                    ri
+                )
+
+
+            # --------------------------------------------------------
+            # Conditional covariance components
+            # --------------------------------------------------------
+
+            variance_y =
+                μi +
+                μi^2 / ri
+
+            variance_log =
+                second_log -
+                mean_log^2
+
+            covariance_y_log =
+                mean_y_log -
+                μi * mean_log
+
+
+            # Numerical protection
+            variance_log =
+                max(
+                    variance_log,
+                    eps(Float64)
+                )
+
+
+            # --------------------------------------------------------
+            # Location in transformed observation
+            # --------------------------------------------------------
+
+            j = g + i
+
+
+            # --------------------------------------------------------
+            # Conditional mean
+            # --------------------------------------------------------
+
+            mean_z[i] = μi
+            mean_z[j] = mean_log
+
+
+            # --------------------------------------------------------
+            # Cheap SPD protection for the 2×2 covariance block
+            #
+            # R_i =
+            #
+            # [ variance_y       covariance_y_log
+            #   covariance_y_log variance_log      ]
+            # --------------------------------------------------------
+
+            v1 = variance_y
+            v2 = variance_log
+            c  = covariance_y_log
+
+            detR =
+                v1 * v2 -
+                c^2
+
+            if !isfinite(detR) || detR <= 0.0
+
+                δ =
+                    relative_floor *
+                    max(
+                        v1,
+                        v2,
+                        1.0
+                    )
+
+                v1 += δ
+                v2 += δ
+
+                # In the unlikely case that roundoff is stronger,
+                # enforce |c| < sqrt(v1*v2)
+                cmax =
+                    sqrt(v1 * v2) *
+                    (1.0 - 1e-10)
+
+                c =
+                    clamp(
+                        c,
+                        -cmax,
+                        cmax
+                    )
+            end
+
+
+            # --------------------------------------------------------
+            # Insert block into full covariance matrix
+            # --------------------------------------------------------
+
+            R[i, i] = v1
+            R[i, j] = c
+
+            R[j, i] = c
+            R[j, j] = v2
+        end
+
+        return nothing
+    end
+
+    return condMoments_nb_grouped!
+end
+
+# ============================================================
+# Grouped constructor
+# ============================================================
+
+function NBFactorialStatsGrouped(;
+    min_mean::Real = 1e-10,
+    min_dispersion::Real = 1e-8,
+    relative_floor::Real = 1e-10
+)
+
+    return NBSuffStats(
+
+        y ->
+            nb_factorial_observation_grouped(y),
+
+        (condMean, condCov) ->
+            make_nb_factorial_statistics_adapters_grouped(
+                condMean,
+                condCov;
+                min_mean = min_mean,
+                min_dispersion = min_dispersion,
+                relative_floor = relative_floor
+            ),
+
+        nPerGroup -> 2 * nPerGroup
     )
 end

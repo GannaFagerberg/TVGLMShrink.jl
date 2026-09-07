@@ -20,6 +20,7 @@ Random.seed!(slurm_id);
 include(joinpath(@__DIR__, "../..") * "/examples/betareg/BetaModel.jl") # BetaReg stuff
 include(joinpath(@__DIR__, "../..") * "/examples/betareg/BetaModelUtils.jl") # BetaReg stuff
 
+
 gr(legend=:topleft, grid=false, color=colors[2], lw=2, legendfontsize=12,
     xtickfontsize=12, ytickfontsize=12, xguidefontsize=12, yguidefontsize=12,
     titlefontsize=18, markerstrokecolor=:auto)
@@ -49,11 +50,9 @@ p = length(covSel[1])
 q = length(covSel[2])
 
 # Link function for the mean and precision
-
 link = (LogitLink(), LogLinLink())
-#link = (CauchitLink(),LogLinLink()) # does not work 
-#link = (LogitLink(),PositiveHardLink(1e-6))
 
+## The prior for the state at time t=0 using priors on intercepts and Fisher info
 ## The prior for the state at time t=0 using priors on intercepts and Fisher info
 priorparam = [0.15, exp(6)] # Best guess for y₀ ∼ BetaMean(priorparam_μ[1], priorparam_μ[2])
 f(x) = priorparam[1] - linkinv(link[1], x)
@@ -66,13 +65,6 @@ n₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFishe
 
 ## Set up the prior, model and algorithm settings
 
-for j in 2:size(X, 2)
-    X[:, j] .= (X[:, j] .- mean(X[:, j]))./ std(X[:, j])
-end
-
-plot(X[:,2])
-
-
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=1)
 priorSettings = (
     ϕ₀=0.5, κ₀=0.3,             # Prior for ϕ ~ N(ϕ₀, κ₀²)
@@ -84,8 +76,13 @@ priorSettings = (
 modelSettings = (
     observation=observation,
     link=link, # link functions for mean and precision
-    condMean=condMean,
+
+    # New for ILF
+    condMean = condMean, 
     condCov=condCov,
+    slrObs = nothing,
+    #end new
+
     innovModel=:dsp,   # choices: :dsp, :homogaussuniv
     α=1 / 2,
     β=1 / 2,
@@ -96,13 +93,13 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
-    nIter=5000,              # Number of iterations in the Gibbs sampler
+    nIter=10000,              # Number of iterations in the Gibbs sampler
     nBurn=3000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility
     h_upper=Inf,              # Upper bound for log-volatility
-    polyaoffset=0.01,          # Offset for Polya-Gamma variables in the update of h_t
+    polyaoffset=0.0,          # Offset for Polya-Gamma variables in the update of h_t
     scaling=:full,            # Scaling of state innov, can be :full, :diagonal or :none
     FisherInfo=FisherInfoBeta,# Fisher info
     nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
@@ -118,34 +115,29 @@ results = []
 interpMethod = :linear
 
 # No scaling and nPerGroup = 3
-
-dateVec = 1:T
-keep_t0 = false # Whether to keep the state at time t=0 in the output of the Gibbs sampler
-results = []
-interpMethod = :linear
-scaling = :diag
+scaling = :none
 nPerGroup = 5
-
 
 ## PGAS 
 methodlabel = "PGAS"
 algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:pgas);
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
 
-θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,priorSettings, modelSettings, algoSettings);
+#θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,priorSettings, modelSettings, algoSettings);
+θpost, groupSizes_laplace, nFailure = GibbsTVGLM(dataSettings,priorSettings, modelSettings, algoSettings);
 
 prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
 println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
     of the simulated trajectories")
 
 # Parameter quantiles on the parameter time scale - this always includes t=0
-# Parameter quantiles on the parameter time scale - this always includes t=0
-quant_paramtime_pgas = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
+quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 
 titles = vcat([L"\beta_{%$(j-1)}" for j in 1:p], [L"\gamma_{%$(j-1)}" for j in 1:q])
-plt = PlotPostParamEvolution(quant_paramtime_pgas, methodlabel, groupSizes;
+plt = PlotPostParamEvolution(quant_paramtime, methodlabel, groupSizes;
     titles=titles, dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
 plot(plt..., layout=(3, 1), size=(1000, 1200), margin=3mm)
+
 
 ## Laplace approximation 
 methodlabel = "Laplace"
@@ -156,61 +148,75 @@ dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
     priorSettings, modelSettings, algoSettings);
 
 prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
-println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% of the simulated trajectories")
+println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
+    of the simulated trajectories")
 
 # Parameter quantiles on the parameter time scale - this always includes t=0
-quant_paramtime_la = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
+quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
+
+PlotPostParamEvolution!(plt, quant_paramtime, methodlabel, groupSizes;
+    dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=3, c=colors[3])
+plot(plt..., layout=(3, 1), size=(1000, 1200), margin=3mm)
+
+savefig(figFolder * "$(applName)_$(algoSettings.scaling)_$(dataSettings.nPerGroup)_dsp.svg")
+savefig(figFolder * "$(applName)_$(algoSettings.scaling)_$(dataSettings.nPerGroup)_dsp.pdf")
+
+
+
+## Homoscedastic Gaussian innovations
+
+modelSettings = (
+    observation=observation,
+    link=link, # link functions for mean and precision
+    condMean=condMean,
+    condCov=condCov,
+    innovModel=:homogaussuniv,   # choices: :dsp, :homogaussuniv
+    α=1 / 2,
+    β=1 / 2,
+    updateσₙ=false, # Update σ²ₙ in the Gibbs sampler, or set σₙ = 1
+    nMixComp=10,    # nComp in mixture approximation of log χ²₁. Only 5 or 10 supported.
+);
+
+
+## PGAS 
+methodlabel = "PGAS"
+algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:pgas);
+dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
+
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
+    priorSettings, modelSettings, algoSettings);
+
+prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
+println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
+    of the simulated trajectories")
+
+# Parameter quantiles on the parameter time scale - this always includes t=0
+quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 
 titles = vcat([L"\beta_{%$(j-1)}" for j in 1:p], [L"\gamma_{%$(j-1)}" for j in 1:q])
-PlotPostParamEvolution!(plt, quant_paramtime_la, methodlabel, groupSizes;
-    dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=1, c=colors[4])
-
-#plt = PlotPostParamEvolution(quant_paramtime_la, methodlabel, groupSizes;titles=titles, dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
+plt = PlotPostParamEvolution(quant_paramtime, methodlabel, groupSizes;
+    titles=titles, dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
 plot(plt..., layout=(3, 1), size=(1000, 1200), margin=3mm)
 
 
-### IPLF
+## Laplace approximation 
+methodlabel = "Laplace"
+algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_laplace);
+dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
 
-methodlabel = "IPLF"
-algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_slr);
-dataSettings = (y=y , X=X, covSel=covSel, nPerGroup=nPerGroup);
+θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
+    priorSettings, modelSettings, algoSettings);
 
-#Random.seed!(678)
-θpost,  nFailure = GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings);
-
-#θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings);
 prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
-println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% of the simulated trajectories")
+println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
+    of the simulated trajectories")
 
-#size(θpost)
-quant_paramtime_iplf = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
-#titles = vcat([L"\beta_{%$(j-1)}" for j in 1:p], [L"\gamma_{%$(j-1)}" for j in 1:q])
-plt = PlotPostParamEvolution(quant_paramtime_iplf, methodlabel, groupSizes;titles=titles, dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:shaded, lw=1, c=colors[1])
-#plot(plt..., layout=(4, 1), size=(1000, 1200), margin=3mm)
+# Parameter quantiles on the parameter time scale - this always includes t=0
+quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 
-#PlotPostParamEvolution!(plt, quant_paramtime_iplf, methodlabel, groupSizes;dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=1, c=colors[3])
+PlotPostParamEvolution!(plt, quant_paramtime, methodlabel, groupSizes;
+    dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=1, c=colors[3])
 plot(plt..., layout=(3, 1), size=(1000, 1200), margin=3mm)
 
-
-plt_final = plot(
-    plt...,
-    layout=(3, 1),
-    size=(1000, 1200),
-    margin=3mm
-)
-
-display(plt_final)
-
-
-#savefig(plt_final, joinpath(@__DIR__, "plot.pdf"))
-
-#PlotPostParamEvolution!(plt, quant_paramtime, methodlabel, groupSizes;
-#  dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=3, c=colors[3])
-#plot(plt..., layout=(3, 1), size=(1000, 1200), margin=3mm)
-#savefig(figFolder * "$(applName)_$(algoSettings.scaling)_$(dataSettings.nPerGroup)_dsp.svg")
-#savefig(figFolder * "$(applName)_$(algoSettings.scaling)_$(dataSettings.nPerGroup)_dsp.pdf")
-
-
-
-## full fails with layiff data and cauchitlink function
-## try full with default functions
+savefig(figFolder * "$(applName)_$(algoSettings.scaling)_$(dataSettings.nPerGroup)_homo.svg")
+savefig(figFolder * "$(applName)_$(algoSettings.scaling)_$(dataSettings.nPerGroup)_homo.pdf")

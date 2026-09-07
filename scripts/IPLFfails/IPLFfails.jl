@@ -81,11 +81,13 @@ for i in 1:3
                 stateDraws=stateDraws)
                     )
 
-
 end 
+
 plot(BetaPlt[3].obsDrawsBeta)
+
 pltBeta = []
 method = 3
+nStates = 3
 for j in 1:nStates
     correlation = round(cor(BetaPlt[method].stateDraws[j,:], BetaPlt[method].obsDrawsBeta), digits = 3)
     push!(pltBeta, scatter(BetaPlt[method].stateDraws[j,:], BetaPlt[method].obsDrawsBeta, color = colors[j], label = "",
@@ -93,7 +95,8 @@ for j in 1:nStates
         ylabel = "Observations", markersize = 5, markerstrokecolor = :black, markerstrokewidth = 0))
 end
 betap = plot(pltBeta..., layout = (1,3), size = (1000, 800))        
-savefig(betap, "/Users/niuyijie/Dropbox/TV_GLM_DSP/ClusterOUT/PoisSim/IPLF_Fail(corr).pdf")
+
+#savefig(betap, "/Users/niuyijie/Dropbox/TV_GLM_DSP/ClusterOUT/PoisSim/IPLF_Fail(corr).pdf")
 
 
 
@@ -477,10 +480,10 @@ push!(results, (
                     )
 
 
-save_path = "/Users/niuyijie/Dropbox/TV_GLM_DSP/ClusterOUT/PoisSim/IPLF_Fail(none).jld2"
-@save save_path results
-using JLD2
-results = load(save_path)["results"]
+#save_path = "/Users/niuyijie/Dropbox/TV_GLM_DSP/ClusterOUT/PoisSim/IPLF_Fail(none).jld2"
+###@save save_path results
+#using JLD2
+#results = load(save_path)["results"]
 
 methodvec = ["IPLF", "Laplace"]
 plt = plot_param_path_poisreg(β)

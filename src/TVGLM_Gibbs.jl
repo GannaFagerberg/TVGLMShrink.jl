@@ -97,13 +97,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
 
             end
         end
-        # Scaling-adjusted prior on μ
-        #scalingFactor_avg = diag(mean(Svec, dims = 3)[:,:,1])
-        #m₀ = m₀ - 2*log.(scalingFactor_avg)
-        priorSettings = (; priorSettings..., m₀ = m₀);
-        #println("Average scaling matrix:")
-        #println(mean(Svec, dims = 3)[:,:,1])
-        println("Adjusted m₀ = $(m₀)")
+
     end
 
     # Define the scaling matrix
@@ -203,18 +197,24 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
 
     nFailure = Ref(0)
 
-    ### For IPLF
-    if stateSamplingMethod == :ffbs_slr
+    ### For transformed-observation filters
+    if stateSamplingMethod == :ffbs_slr ||
+    stateSamplingMethod == :ffbs_iekf
 
         Y_sufficient = slrObs.Y
-        sufficient_condMoments = slrObs.condMoments
         nObs = slrObs.nObs
 
-        ws = TVGLMShrink.IPLFWorkspace(
-            Float64,
-            nState,
-            nObs
-        )
+        # IPLF-specific
+        if stateSamplingMethod == :ffbs_slr
+
+            sufficient_condMoments = slrObs.condMoments
+
+            ws = TVGLMShrink.IPLFWorkspace(
+                Float64,
+                nState,
+                nObs
+            )
+        end
     end
 
     ### Begin the LOOP
@@ -235,7 +235,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
         elseif stateSamplingMethod == :ffbs_slr
             if scaling === :none
                 FFBS_SLR_transformed!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
-                #FFBS_SLR_test!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=0.001, β=2, κ=0, sample_t0=true, nFailure=nFailure)
+                #FFBS_SLR_transformed!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=0.5, β=1, κ=0, sample_t0=true, nFailure=nFailure)
             else
                 FFBS_SLR_transformed_scaling!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀, nMaxIter, ScaleMat, Svec, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
             end
@@ -246,6 +246,17 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
             for t in 1:T
                 Svec[:, :, t] = ScaleMat(param, θ[t, :], t)
             end
+
+        elseif stateSamplingMethod == :ffbs_iekf
+
+        sufficient_condMoments_IEKF = modelSettings.sufficient_condMoments_IEKF
+        sufficient_condJacobian = modelSettings.sufficient_condJacobian
+
+        if scaling === :none
+            FFBS_IEKF_transformed!(θ,U,Y_sufficient,A,B,sufficient_condMoments_IEKF,sufficient_condJacobian,param,param.Σᵥ,μ₀,Σ₀,nMaxIter;sample_t0=true,nFailure=nFailure)
+        else
+            error("Scaling is not yet implemented for stateSamplingMethod = :ffbs_iekf")
+        end
 
         elseif stateSamplingMethod == :montecarlo
             if scaling === :none
@@ -279,7 +290,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
                 update_dsp!(groupsize_common, ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings, mixture, Dᵩ, offset, α, β, updateσₙ, h_upper, polyaoffset)
             end
         elseif innovModel == :homogaussuniv # homoscedastic case
-            update_homoscedastic_uni!(ν, H, 4, exp.(m₀/2))
+            update_homoscedastic_uni!(ν, H, 4, exp(m₀[1]/2))
         else
             error("the chosen innovation model is not implemented yet.")
         end

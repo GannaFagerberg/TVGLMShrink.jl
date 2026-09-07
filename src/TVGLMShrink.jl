@@ -15,25 +15,41 @@ export LogLinLink,
 using SpecialFunctions: digamma, trigamma
 using Roots: find_zero
 
+
+# ============================================================
+# Observation transformation interface
+#
+# MUST be defined before BetaModelSufficient.jl,
+# GammaModelSufficient.jl, NBModelSufficient.jl, etc.
+# ============================================================
+
+abstract type AbstractObsTransform end
+struct IdentityTransform <: AbstractObsTransform end
+
+
 include("TVGLM_TransformedFFBS_KF.jl")
 include("TVGLM_Gibbs.jl")
 include("BetaModelSufficient.jl")
+include("BetaModelSufficient_single.jl")
 include("GammaModelSufficient.jl")
 include("NBModelSufficient.jl")
+include("IEKF_cond_fns.jl")
 
 export FFBS_SLR_transformed!, FFBS_SLR_transformed_scaling!!, GibbsTVGLM
 export BetaSuffStats, BetaSuffStatsGrouped, BetaSuffStatsAveraged, prepare_observation_transform
+export BetaSingleSuffStatGrouped
 export prepare_observation_transform
-export GammaSuffStatsAveraged
+export GammaSuffStatsAveraged,  GammaSuffStatsGrouped
 export fisher_gamma_blocks, FisherInfoGamma
-export fisher_nb_blocks, FisherInfoNB, NBFactorialStatsAveraged
+export fisher_nb_blocks, FisherInfoNB, NBFactorialStatsAveraged, NBFactorialStatsGrouped
+export FFBS_IEKF_transformed!, kalmanfilter_update_transformed_IEKF, BetaSuffStatsCondMoments, BetaSuffStatsJacobian
 
 include("TVGLMPlots.jl")
 export PlotPostParamEvolution, PlotPostParamEvolution!, postPredCheckDistr
 
 include("TVGLMUtils.jl")
 export exp_lin, exp_lin_inv, simulateAR, simulateVAR, interpParam2Obs, scalingLabel
-export XDiagX, XDiagZ, densityScores
+export XDiagX, XDiagZ, densityScores,update_homoscedastic_uni!
 
 include("TVGLMModels.jl")
 export TVGLMmodel, LogLinLink, PositiveHardLink

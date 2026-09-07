@@ -230,10 +230,6 @@ function linkfun(
 end
 
 
-#### Structs for ILF
-abstract type AbstractObsTransform end
-struct IdentityTransform <: AbstractObsTransform end
-
 function make_identity_cond_moments(
     raw_condMean,
     raw_condCov

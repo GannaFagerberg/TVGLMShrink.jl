@@ -48,8 +48,9 @@ nState = p + q            # = 2
 # Link functions
 # ----------------------------------------------------------
 
-link = (LogitLink(), LogLinLink()) # best so far
-invlink = (x -> logistic(x), x -> exp(x))
+#link = (LogitLink(), LogLinLink()) # best so far
+#link = (LogitLink(), ()) # best so far
+invlink2 = (x -> logistic(x), x -> exp(x))
 
 # ==========================================================
 # TRUE UNRESTRICTED STATE PATHS
@@ -65,15 +66,16 @@ invlink = (x -> logistic(x), x -> exp(x))
 for t in 1:T
 
     # unrestricted mean state
-    β[t, 1] =0.8 * sin(2.5π * t / 150)
+    β[t, 1] = 0.8 * sin(2.5π * t / 150)
+    γ[t, 1] = 0.8 * sin(2.5π * t / 150)
 
     # unrestricted log-precision state
     #γ[t, 1] =1.5 + 0.5 * cos(2π * t / 200)
     # Precision state: step change
 end
 
-    #β[1:250, 1]  .=  0.05
-    #β[251:end, 1] .=  0.5
+    #β[1:250, 1]  .=  -3.1
+    #β[251:end, 1] .=  -4.1
 
     #γ[1:250, 1]   .= log(10.0)
     #γ[251:end, 1] .= log(5.0)
@@ -81,8 +83,8 @@ end
     #γ[1:250, 1]   .= log(0.5)
     #γ[251:end, 1] .= log(1.5)  
     
-    γ[1:250, 1]   .= -1.5
-    γ[251:end, 1] .=  0.0
+    #γ[1:250, 1]   .= 3.5
+    #γ[251:end, 1] .=  3.5
 
     #γ[1:250, 1]   .= 1.5
     #γ[251:end, 1] .= 3.5   
@@ -95,8 +97,8 @@ end
 ψtime = similar(γ[:, 1])
 
 for t in 1:T
-    μtime[t] = invlink[1](β[t, 1])
-    ψtime[t] = invlink[2](γ[t, 1])
+    μtime[t] = invlink2[1](β[t, 1])
+    ψtime[t] = invlink2[2](γ[t, 1])
 end
 
 # Beta shape parameters
@@ -137,7 +139,7 @@ mₑ = Float64[]
 plt = plot_param_path_betareg(β, γ)
 
 # plot the evolution of the Beta distribution parameters over time
-plot_betaparam_evolution(μtime, ψtime, αtime, βtime)
+#plot_betaparam_evolution(μtime, ψtime, αtime, βtime)
 
 # plot the evolution of the Beta density over time and the time series
 plot_betadensity_evolution(μtime, ψtime, y)
@@ -150,10 +152,10 @@ v = max(var(y[1:20]), eps(Float64))
 
 priorparam = [m, κ_init]
 
-f_μ(x) = priorparam[1] - invlink[1](x)
+f_μ(x) = priorparam[1] - invlink2[1](x)
 β_m0 = [find_zero(f_μ, 0.0); zeros(p - 1)]
 
-f_ϕ(x) = priorparam[2] - invlink[2](x)
+f_ϕ(x) = priorparam[2] - invlink2[2](x)
 β_ϕ0 = [find_zero(f_ϕ, log(κ_init)); zeros(q - 1)]
 
 μ₀ = [β_m0; β_ϕ0]
@@ -220,7 +222,7 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
-    nIter=1000,              # Number of iterations in the Gibbs sampler
+    nIter=5000,              # Number of iterations in the Gibbs sampler
     nBurn=1000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
@@ -230,7 +232,7 @@ algoSettings = (
     scaling=:none,            # Scaling of state innov, can be :full, :diagonal or :none
     FisherInfo=FisherInfoBeta,# Fisher info
     nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
-    fixed_scaling = false,     # Should the scaling matrix be fixed across Gibbs iter?
+    fixed_scaling = true,     # Should the scaling matrix be fixed across Gibbs iter?
     verbose=true,             # Whether to print verbose output during sampling.
 );
 
@@ -238,7 +240,7 @@ dateVec = 1:T
 keep_t0 = false # Whether to keep the state at time t=0 in the output of the Gibbs sampler
 results = []
 interpMethod = :linear
-scaling = :none
+scaling = :full
 nPerGroup = 5
 
 ## IPLF 
@@ -246,7 +248,33 @@ methodlabel = "IPLF"
 
 # Beta
 #obsTransform = BetaSuffStatsAveraged()
-obsTransform = IdentityTransform()
+
+obsChoice = :both
+
+obsTransform =
+    if obsChoice === :y
+
+        IdentityTransform()
+
+    elseif obsChoice === :logy
+
+        BetaSingleSuffStatGrouped(:logy)
+
+    elseif obsChoice === :log1my
+
+        BetaSingleSuffStatGrouped(:log1my)
+
+    elseif obsChoice === :both
+
+        BetaSuffStatsGrouped()
+
+    else
+
+        error("Unknown obsChoice = $obsChoice")
+end
+
+
+#obsTransform = IdentityTransform()
 Y, _, _, groupSizes = splitEqualGroups(y, X, covSel, nPerGroup)
 
 slrObs = prepare_observation_transform(
@@ -258,7 +286,7 @@ slrObs = prepare_observation_transform(
 )
 
 algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_slr);
-dataSettings = (y=y , X=X, covSel=covSel, nPerGroup=nPerGroup);
+dataSettings = (y= y, X=X, covSel=covSel, nPerGroup=nPerGroup);
 modelSettings = (;modelSettings...,slrObs = slrObs)
 
 Random.seed!(678)
@@ -283,8 +311,6 @@ PlotPostParamEvolution!(
     lw=2,
     c=colors[4]
 )
-
 display(plt_iplf)
-
 
 #### Run from 5 seeds and plot 

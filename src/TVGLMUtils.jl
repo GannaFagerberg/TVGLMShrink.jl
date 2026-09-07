@@ -238,31 +238,18 @@ function densityScores(θpost, θtrue)
     return CRPS, energyScore, variogramScore
 end
 
+""" 
+    update_homoscedastic_uni!(ν, H, ζ₀, λ²₀)
 
-#### Observationa transform and transformed moments for IPLF
-function prepare_observation_transform(
-    transform::BetaSuffStats,
-    Y,
-    condMean,
-    condCov,
-    nPerGroup
-)
-
-    Y_transformed = [
-        transform.transform_obs(Y[t])
-        for t in eachindex(Y)
-    ]
-
-    condMoments = transform.make_cond_moments(
-        condMean,
-        condCov
-    )
-
-    nObs = transform.obs_dim(nPerGroup)
-
-    return (
-        Y = Y_transformed,
-        condMoments = condMoments,
-        nObs = nObs
-    )
+Gibbs update of univariate homoscedastic variance instead of DSP
+using prior σ²ₖ ~ Inv-χ²(ζ₀, λ²₀)
+Still using the DSP container H, but all row are the same.
+"""
+function update_homoscedastic_uni!(ν, H, ζ₀, λ²₀)
+    T, p = size(ν)
+    for k = 1:p
+        ζₙ = ζ₀ + T
+        λ²ₙ = (ζ₀ * λ²₀ + sum(ν[:, k] .^ 2)) / ζₙ
+        H[:, k] .= log.(rand(ScaledInverseChiSq(ζₙ, λ²ₙ)))
+    end
 end

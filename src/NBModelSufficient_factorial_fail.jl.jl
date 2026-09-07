@@ -1,9 +1,3 @@
-struct NBSuffStats{F1,F2,F3} <: AbstractObsTransform
-    transform_obs::F1
-    make_cond_moments::F2
-    obs_dim::F3
-end
-
 # ============================================================
 # Negative-binomial factorial-moment observation helpers
 #
@@ -21,6 +15,12 @@ end
 # This is a factorial-moment transformation, not a canonical
 # sufficient-statistic representation.
 # ============================================================
+
+struct NBSuffStats{F1,F2,F3} <: AbstractObsTransform
+    transform_obs::F1
+    make_cond_moments::F2
+    obs_dim::F3
+end
 
 
 function _nb_vector(value, name::AbstractString)

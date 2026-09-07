@@ -36,7 +36,8 @@ q = length(covSel[2])
 γ₀ = [1]        # log precision intercept
 #link = (LogitLink(), LogLink())
 logistic(x) = 1 / (1 + exp(-x))
-invlink = (x -> logistic(x), x -> exp(x))
+invlink2 = (x -> logistic(x), x -> exp(x))
+
 ρ = [0.7, 0.7];      # AR(1) coefficients for the covariate processes
 σₑ = [1, 10];        # Noise std for the AR(1) processes that generate the covariates
 mₑ = [0.0, 0.0];     # Mean for the AR(1) processes that generate the covariates
@@ -45,7 +46,7 @@ mₑ = [0.0, 0.0];     # Mean for the AR(1) processes that generate the covariat
  #   x -> linkinv(link[1], x), x -> linkinv(link[2], x), ρ, σₑ, mₑ, β₀, γ₀);
 
 y, Xmx, β, γ, μtime, ψtime, αtime, βtime = simulate_beta_reg_data(T, nCov, covSel,
-    invlink[1], invlink[2], ρ, σₑ, mₑ, β₀, γ₀);
+    invlink2[1], invlink2[2], ρ, σₑ, mₑ, β₀, γ₀);
 y = clamp.(y, 1e-16, 1 - 1e-16) # Ensure y is in (0, 1) for Beta regression
 ## Plot the true parameter paths and the time series
 
@@ -63,11 +64,11 @@ m = mean(y[1:20])
 v = var(y[1:20])
 priorparam = [m, m * (1 - m) / v - 1] # Prior for y₀ ∼ BetaMean(priorparam[1], priorparam[2])
 #f_μ(x) = priorparam[1] - linkinv(link[1], x)
-f_μ(x) = priorparam[1] - invlink[1](x)
+f_μ(x) = priorparam[1] - invlink2[1](x)
 β_m0 = [find_zero(f_μ, 0.0); zeros(p - 1)]
 
-#f_ϕ(x) = priorparam[2] - linkinv(link[2], x)
-f_ϕ(x) = priorparam[2] - invlink[2](x)
+f_ϕ(x) = priorparam[2] - linkinv(link[2], x)
+#f_ϕ(x) = priorparam[2] - invlink[2](x)
 β_ϕ0 = [find_zero(f_ϕ, 0.0); zeros(q - 1)]
 
 μ₀ = [β_m0; β_ϕ0]

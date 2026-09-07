@@ -182,6 +182,19 @@ function make_gamma_sufficient_statistics_adapters_averaged(
 
         κ =max(κ,min_precision)
 
+        if any(μ .< 1e-6) ||
+        any(κ .< 1e-2) ||
+        any(κ .> 1e3) ||
+        any(.!isfinite.(μ)) ||
+        any(.!isfinite.(κ))
+
+            @show t
+            @show extrema(ημ)
+            @show extrema(μ)
+            @show extrema(ηκ)
+            @show extrema(κ)
+        end
+
         return μi, κ, g
     end
 
@@ -389,3 +402,353 @@ function FisherInfoGamma(param, μ, t)
     )
 end
 
+# ============================================================
+# Gamma sufficient statistics -- GROUPED / REGRESSION VERSION
+#
+# Y_i | μ_i, κ_i ~ Gamma(shape = κ_i, scale = μ_i/κ_i)
+#
+# z =
+# [
+#   log(y_1)
+#   ...
+#   log(y_g)
+#   y_1
+#   ...
+#   y_g
+# ]
+#
+# Dimension = 2g
+#
+# This version allows μ_i and/or κ_i to vary within a group,
+# e.g. because of regression covariates.
+# ============================================================
+
+
+function gamma_sufficient_observation_grouped(
+    y;
+    clip::Bool = false,
+    boundary::Real = 1e-12
+)
+
+    y_group = _gamma_vector(
+        y,
+        "y"
+    )
+
+    g = length(y_group)
+
+    z = Vector{Float64}(undef, 2 * g)
+
+    @inbounds for i in 1:g
+
+        yi = y_group[i]
+
+        isfinite(yi) ||
+            throw(DomainError(
+                yi,
+                "Gamma observations must be finite."
+            ))
+
+        if yi <= 0
+            if clip
+                yi = max(
+                    yi,
+                    boundary
+                )
+            else
+                throw(DomainError(
+                    yi,
+                    "Gamma observations must be strictly positive."
+                ))
+            end
+        end
+
+        # First block: log(y_i)
+        z[i] = log(yi)
+
+        # Second block: y_i
+        z[g + i] = yi
+    end
+
+    return z
+end
+
+
+# ============================================================
+# Conditional moments for grouped Gamma sufficient statistics
+# ============================================================
+
+function make_gamma_sufficient_statistics_adapters_grouped(
+    raw_condMean,
+    raw_condCov;
+    min_mean::Real = 1e-10,
+    min_precision::Real = 1e-10
+)
+
+    # ========================================================
+    # Construct μ_i and κ_i directly from the state.
+    #
+    # This is important for regression because μ_i may vary
+    # across observations within the same group.
+    # ========================================================
+
+    function gamma_parameters_from_original_model_grouped(
+        param,
+        state,
+        t
+    )
+
+        # Linear predictor for mean
+        ημ =
+            param.Z[1][t] *
+            state[param.Zidx[1]]
+
+        # Linear predictor for precision
+        ηκ =
+            param.Z[2][t] *
+            state[param.Zidx[2]]
+
+        # If desired:
+        #
+        # ημ = clamp.(ημ, -20.0, 20.0)
+        # ηκ = clamp.(ηκ, -20.0, 20.0)
+
+        μ =
+            linkinv.(
+                Ref(param.link[1]),
+                ημ
+            )
+
+        κ =
+            linkinv.(
+                Ref(param.link[2]),
+                ηκ
+            )
+
+        # Make sure they are vectors also in scalar cases
+        μ = _gamma_vector(
+            μ,
+            "Gamma conditional mean"
+        )
+
+        κ = _gamma_vector(
+            κ,
+            "Gamma conditional precision"
+        )
+
+        g = length(μ)
+
+        # ----------------------------------------------------
+        # Allow scalar κ with regression only in the mean.
+        #
+        # If Zκ gives a single common precision parameter,
+        # repeat it across all observations.
+        # ----------------------------------------------------
+
+        if length(κ) == 1 && g > 1
+            κ = fill(
+                κ[1],
+                g
+            )
+        end
+
+        length(κ) == g ||
+            throw(DimensionMismatch(
+                "Gamma mean has length $g but precision has " *
+                "length $(length(κ))."
+            ))
+
+        # Numerical safeguards
+        μ = max.(
+            μ,
+            min_mean
+        )
+
+        κ = max.(
+            κ,
+            min_precision
+        )
+
+        all(isfinite, μ) ||
+            throw(DomainError(
+                μ,
+                "Non-finite Gamma mean."
+            ))
+
+        all(isfinite, κ) ||
+            throw(DomainError(
+                κ,
+                "Non-finite Gamma precision."
+            ))
+
+        return μ, κ
+    end
+
+
+    # ========================================================
+    # Moments of
+    #
+    # z =
+    # [
+    #   log(Y_1), ..., log(Y_g),
+    #   Y_1,     ..., Y_g
+    # ]
+    #
+    # ========================================================
+
+    function condMoments_gamma_sufficient_grouped!(
+        mean_z,
+        R,
+        param,
+        state,
+        t
+    )
+
+        μ, κ =
+            gamma_parameters_from_original_model_grouped(
+                param,
+                state,
+                t
+            )
+
+        g = length(μ)
+
+        length(mean_z) == 2g ||
+            throw(DimensionMismatch(
+                "mean_z has length $(length(mean_z)), " *
+                "expected $(2g)."
+            ))
+
+        size(R) == (2g, 2g) ||
+            throw(DimensionMismatch(
+                "R has size $(size(R)), " *
+                "expected ($(2g), $(2g))."
+            ))
+
+        # Conditional independence across observations means
+        # all cross-observation covariance entries are zero.
+        fill!(
+            R,
+            zero(eltype(R))
+        )
+
+        @inbounds for i in 1:g
+
+            j = g + i
+
+            μi = μ[i]
+            κi = κ[i]
+
+            # =================================================
+            # Conditional mean
+            # =================================================
+
+            # E[log(Y_i)]
+            mean_z[i] =
+                digamma(κi) +
+                log(μi) -
+                log(κi)
+
+            # E[Y_i]
+            mean_z[j] =
+                μi
+
+
+            # =================================================
+            # Conditional covariance
+            # =================================================
+
+            # Var(log(Y_i))
+            R[i, i] =
+                trigamma(κi)
+
+            # Var(Y_i)
+            R[j, j] =
+                μi^2 / κi
+
+            # Cov(log(Y_i), Y_i)
+            cov_log_y =
+                μi / κi
+
+            R[i, j] =
+                cov_log_y
+
+            R[j, i] =
+                cov_log_y
+        end
+
+        # Usually not necessary analytically, but retain your
+        # numerical safeguard for extreme sigma points.
+        #R .= _make_spd(R;relative_floor = 1e-10)
+        fill!(R, 0)
+        @inbounds for i in 1:g
+
+            j = g + i
+
+            μi = μ[i]
+            κi = κ[i]
+
+            mean_z[i] =
+                digamma(κi) +
+                log(μi) -
+                log(κi)
+
+            mean_z[j] = μi
+
+            Ri = [
+                trigamma(κi)    μi / κi
+                μi / κi         μi^2 / κi
+            ]
+
+            Ri = _make_spd(
+                Ri;
+                relative_floor = 1e-8
+            )
+
+            R[i, i] = Ri[1, 1]
+            R[i, j] = Ri[1, 2]
+            R[j, i] = Ri[2, 1]
+            R[j, j] = Ri[2, 2]
+        end
+
+        return nothing
+    end
+
+    return condMoments_gamma_sufficient_grouped!
+end
+
+
+# ============================================================
+# Observation transform constructor
+# ============================================================
+
+function GammaSuffStatsGrouped(;
+    clip::Bool = false,
+    boundary::Real = 1e-12,
+    min_mean::Real = 1e-10,
+    min_precision::Real = 1e-10
+)
+
+    return GammaSuffStats(
+
+        # Transform raw observations
+        y ->
+            gamma_sufficient_observation_grouped(
+                y;
+                clip = clip,
+                boundary = boundary
+            ),
+
+        # Construct transformed conditional moments
+        (condMean, condCov) ->
+            make_gamma_sufficient_statistics_adapters_grouped(
+                condMean,
+                condCov;
+                min_mean = min_mean,
+                min_precision = min_precision
+            ),
+
+        # Two statistics per raw observation
+        nPerGroup -> 2 * nPerGroup
+    )
+end

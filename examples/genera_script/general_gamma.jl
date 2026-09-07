@@ -295,6 +295,7 @@ modelSettings = (
 
     # Gamma
     obsTransform = GammaSuffStatsAveraged()
+    #obsTransform = GammaSuffStatsGrouped()
     #obsTransform = IdentityTransform()
     Y, _, _, groupSizes = splitEqualGroups(y, X, covSel, nPerGroup)
 
