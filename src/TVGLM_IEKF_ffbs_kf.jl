@@ -292,7 +292,197 @@ function BetaSuffStatsJacobian(state, param, t)
 end
 
 
+function constrain_precision_variance(
+    Omega_updated::AbstractMatrix,
+    precision_idx::Int,
+    sd_gamma_max::Real
+)
+
+    Omega = Matrix(Omega_updated)
+
+    var_gamma_max = sd_gamma_max^2
+    Orr = Omega[precision_idx, precision_idx]
+
+    if !isfinite(Orr) || Orr <= 0
+        error("IEKF precision-state variance must be finite and positive.")
+    end
+
+    if Orr > var_gamma_max
+
+        # Required rescaling of the precision-state standard deviation
+        s = sqrt(var_gamma_max / Orr)
+
+        # Scale corresponding row and column
+        Omega[precision_idx, :] .*= s
+        Omega[:, precision_idx] .*= s
+
+        # Restore exact symmetry numerically
+        Omega = Matrix(Symmetric((Omega + Omega') / 2))
+    end
+
+    return Omega
+end
+
 function kalmanfilter_update_transformed_IEKF(
+    mu::AbstractVector,
+    Omega::AbstractMatrix,
+    u::AbstractVector,
+    z::AbstractVector,
+    A::AbstractMatrix,
+    B::AbstractMatrix,
+    condMoments,
+    condJacobian,
+    param,
+    Sigma_n::AbstractMatrix,
+    t,
+    maxIter::Integer;
+    tol::Real = 1e-3,
+    covariance_floor::Real = 1e-8,
+    return_diagnostics::Bool = false,
+)
+
+    maxIter >= 1 ||throw(ArgumentError("maxIter must be at least one."))
+
+    # ==========================================================
+    # Prior
+    # ==========================================================
+
+    mu_prior = A * mu + B * u
+    Omega_prior = A * Omega * A' + Sigma_n
+
+    # ==========================================================
+    # IEKF iterations
+    # ==========================================================
+
+    mu_iter = copy(mu_prior)
+
+    mean_distance = Inf
+    iteration_used = 0
+
+    # quantities from the last IEKF iteration
+    H_k = nothing
+    R_k = nothing
+    S_k = nothing
+    K_k = nothing
+
+    precision_idx = 3
+    delta_gamma   = 0.5 # Maximum precision-state change per iteration
+    sd_gamma_max  = 1.0      # maximum posterior SD of precision state
+    var_gamma_max = sd_gamma_max^2
+
+    if maxIter == 1
+        prior_sd_gamma = sqrt(Omega_prior[precision_idx, precision_idx])
+        delta_gamma_eff = 1.0
+    else
+        delta_gamma_eff = delta_gamma
+    end
+
+    ###
+    constrained = true
+    
+    for iteration in 1:maxIter
+
+        iteration_used = iteration
+        h_k, R_k = condMoments(mu_iter, param, t)
+        H_k = condJacobian(mu_iter, param, t)
+
+        # Omega_prior remains fixed
+        S_k = H_k * Omega_prior * H_k' + R_k
+        K_k = Omega_prior * H_k' / S_k
+
+        # Ordinary IEKF proposal
+        mu_new = mu_prior + K_k * (z - h_k - H_k * (mu_prior - mu_iter))
+
+        # ------------------------------------------------------
+        # Restrict the proposed precision-state increment
+        # ------------------------------------------------------
+        d = mu_new - mu_iter
+        b = clamp(d[precision_idx], -delta_gamma_eff, delta_gamma_eff) # clamp only precision
+     
+        if constrained 
+            step_limited = b != d[precision_idx]
+
+                if step_limited
+
+                    # Required column of C = Omega_prior - K_k * H_k * Omega_prior
+                    P_col = @view Omega_prior[:, precision_idx]
+                    C_col = P_col - K_k * (H_k * P_col)
+                    Crr   = C_col[precision_idx]
+                    if !isfinite(Crr) || Crr <= 0
+                        error("IEKF precision-state variance must be finite and positive.")
+                    end
+                    
+                    # Adjust the full increment using its covariance with precision
+                    adjustment = (b - d[precision_idx]) / Crr
+                    d .+= adjustment .* C_col
+                    d[precision_idx] = b
+                    mu_new = mu_iter + d   
+            end
+        end
+
+        # ------------------------------------------------------
+        # Convergence
+        # ------------------------------------------------------
+        mean_distance = norm(mu_new - mu_iter)
+        mu_iter = mu_new
+
+        if !step_limited && mean_distance < tol
+            break
+        end
+    end
+
+    # ==========================================================
+    # Covariance update
+    #
+    # Use H_k, R_k and K_k from the LAST IEKF iteration.
+    # Do NOT recompute them after the iteration has stopped.
+    # ==========================================================
+
+    # Joseph
+    #I_KH = I - K_k * H_k
+    #Omega_updated = I_KH * Omega_prior * I_KH' + K_k * R_k * K_k'
+
+    Omega_updated =(I - K_k * H_k) *Omega_prior
+    Omega_updated = Matrix(Symmetric((Omega_updated + Omega_updated')/2))
+
+   if constrained
+    Omega_updated = constrain_precision_variance(Omega_updated,precision_idx,sd_gamma_max)
+   end
+
+    # ==========================================================
+    # Return
+    # ==========================================================
+
+    if return_diagnostics
+
+        return (
+            mu = mu_iter,
+            Omega = Omega_updated,
+            mu_prior = mu_prior,
+            Omega_prior = Omega_prior,
+
+            diagnostics = (
+                iteration = iteration_used,
+                mean_distance = mean_distance,
+                marginal_observation = copy(h_k),
+                observation_covariance = copy(R_k),
+                linearization = copy(H_k),
+                innovation_covariance = copy(S_k),
+                gain = copy(K_k),
+            ),
+        )
+    end
+
+    return (
+        mu_iter,
+        Omega_updated,
+        mu_prior,
+        Omega_prior,
+    )
+end
+
+
+function kalmanfilter_update_transformed_IEKF_ref(
     mu::AbstractVector,
     Omega::AbstractMatrix,
     u::AbstractVector,
@@ -368,9 +558,8 @@ function kalmanfilter_update_transformed_IEKF(
 
         # OBS! Project precision state back to its admissible domain
     
-        idx = [3]
-        #parameter_floor = 0.1^3
-        mu_new[idx] .= max.(mu_new[idx], -3.0)
+        #idx = [3]
+        #mu_new[idx] .= max.(mu_new[idx], -3)
 
         # ------------------------------------------------------
         # Convergence

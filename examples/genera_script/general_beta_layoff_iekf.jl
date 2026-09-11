@@ -13,6 +13,7 @@ using GLM
 using Roots
 using SpecialFunctions: digamma, trigamma
 using CSV, DataFrames, Dates, JLD2
+using Optim
 
 slurm_id = get_slurm_id() # get slurm ID, if on cluster
 
@@ -49,9 +50,11 @@ println("$(sum(ismissing.(eachrow(df)))) observations with missing values")
 y = df.layoff_share # df.layoff_share
 T = size(y, 1)
 dates = df.date
+
 X = [ones(T) df.credit_spr_lag1 df.vix_lag1 df.cpi_infl df.sentiment_lag1 df.log_oil_lag1]
 # standardize covariates
 #X[:, 2:end] = (X[:, 2:end] .- mean(X[:, 2:end], dims=1)) ./ std(X[:, 2:end], dims=1)
+#X[:, 2:end] = (X[:, 2:end] .- mean(X[:, 2:end], dims=1))
 
 X = Matrix{Float64}(X)
 dateVec = year.(df.date) .+ (month.(df.date) .- 1) ./ 12
@@ -60,7 +63,8 @@ p = length(covSel[1])
 q = length(covSel[2])
 
 # Link function for the mean and precision
-link = (LogitLink(), LogLinLink())
+link = (LogitLink(), LogLink())
+#link = (LogitLink(), LogLinLink())
 #link = (CauchitLink(),LogLinLink()) # does not work 
 #link = (LogitLink(),PositiveHardLink(1e-6))
 
@@ -91,7 +95,7 @@ end
     μ = linkinv.(param.link[1], ημ)
     κ = linkinv.(param.link[2], ηκ)
     μ = clamp.(μ, 1e-12, 1.0 - 1e-12)
-    κ = max.(κ, 1e-10)
+    κ = max.(κ, 1e-12)
     variance_y = μ .* (1.0 .- μ) ./ (κ .+ 1.0)
     return Matrix(Diagonal(vec(variance_y)))
 end
@@ -127,7 +131,7 @@ modelSettings = (
     slrObs = nothing,
     #end new
 
-    innovModel=:dsp,   # choices: :dsp, :homogaussuniv
+    innovModel= :dsp,   # choices: :dsp, :homogaussuniv
     α=1/2,
     β=1/2,
     updateσₙ=false, # Update σ²ₙ in the Gibbs sampler, or set σₙ = 1
@@ -137,17 +141,17 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
-    nIter=10000,              # Number of iterations in the Gibbs sampler
+    nIter=10000,               # Number of iterations in the Gibbs sampler
     nBurn=3000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
-    nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
+    nPrePGAS=100,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility
     h_upper=Inf,              # Upper bound for log-volatility
-    polyaoffset=0.01,          # Offset for Polya-Gamma variables in the update of h_t
+    polyaoffset=0.01,         # Offset for Polya-Gamma variables in the update of h_t
     scaling=:none,            # Scaling of state innov, can be :full, :diagonal or :none
     FisherInfo=FisherInfoBeta,# Fisher info
     nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
-    fixed_scaling = false,     # Should the scaling matrix be fixed across Gibbs iter?
+    fixed_scaling = true,    # Should the scaling matrix be fixed across Gibbs iter?
     verbose=true,             # Whether to print verbose output during sampling.
 );
 
@@ -169,13 +173,41 @@ mkpath(save_dir)
 methodlabel = "Laplace-None"
 algoSettings_laplace = (;algoSettings...,scaling = scaling,stateSamplingMethod = :ffbs_laplace)
 dataSettings_laplace = (y = y,X = X,covSel = covSel,nPerGroup = nPerGroup)
+priorSettings_laplace = (;priorSettings..., n₀=1)
 
 Random.seed!(1)
-θpost_laplace, groupSizes_laplace, nFailure_laplace =GibbsTVGLM(dataSettings_laplace,priorSettings,modelSettings,algoSettings_laplace)
+θpost_laplace, groupSizes_laplace,  nFailure, nLaplaceFailure =GibbsTVGLM(dataSettings_laplace,priorSettings_laplace,modelSettings,algoSettings_laplace)
+prcFailure_laplace =100 * nFailure[] /(algoSettings_laplace.nBurn + algoSettings_laplace.nIter)
 
-prcFailure_laplace =100 * nFailure_laplace[] /(algoSettings_laplace.nBurn + algoSettings_laplace.nIter)
 println("$(algoSettings_laplace.stateSamplingMethod) failed at ","$(prcFailure_laplace)% of the simulated trajectories")
+Y, Z, _, _ =splitEqualGroups(y,X,covSel,nPerGroup)
+nLaplaceTotal =(algoSettings.nBurn + algoSettings.nIter) * length(Y)
+prcLaplaceFailure =100 * nLaplaceFailure[] / nLaplaceTotal
+println("Laplace mode optimization failed at ", round(prcLaplaceFailure, digits = 2),"% of the filtering updates.")
+
+#quant_paramtime_laplace =quantile_multidim(θpost_laplace,[0.025, 0.5, 0.975],dims = 3)
+#quant_paramtime_laplace_const =quantile_multidim(θpost_laplace_const,[0.025, 0.5, 0.975],dims = 3)
 quant_paramtime_laplace =quantile_multidim(θpost_laplace,[0.025, 0.5, 0.975],dims = 3)
+
+plt_overlay = plot(layout = (3, 1),size = (900, 650),legend = :topright)
+#PlotPostParamEvolution!(plt_overlay,quant_paramtime_laplace,"Laplace",groupSizes_laplace;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[1])
+#PlotPostParamEvolution!(plt_overlay,quant_paramtime_laplace_const,"Laplace",groupSizes_laplace;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[1])
+PlotPostParamEvolution!(plt_overlay,quant_paramtime_laplace,"Laplace homoskedastic",groupSizes_laplace;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[1])
+display(plt_overlay)
+
+#savefig(plt_overlay,joinpath(save_dir, "laplace_homo_gr1_layof_4000iters.pdf"))
+
+### without constr: t 89.4% of the simulated trajectories, 4000 iter
+### withut constr : Laplace mode optimization failed at 8.34% of the filtering updates.
+
+
+plt_overlay = plot(layout = (3, 1),size = (900, 650),legend = :topright)
+PlotPostParamEvolution!(plt_overlay,quant_paramtime_iekf,"IEKF constrained",groupSizes_iekf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[6])
+PlotPostParamEvolution!(plt_overlay,quant_paramtime_iplf,"IPLF constrained",groupSizes_iplf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[2])
+PlotPostParamEvolution!(plt_overlay,quant_paramtime_laplace_const,"Laplace constrained",groupSizes_laplace;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[1])
+display(plt_overlay)
+savefig(plt_overlay,joinpath(save_dir, "laplace_iplf_iekf_constrained_gr1_layoff_4000iters.pdf"))
+
 
 # ============================================================
 # 2. IPLF
@@ -199,22 +231,34 @@ end
 
 Y, _, _, groupSizes_iplf =splitEqualGroups(y,X,covSel,nPerGroup)
 slrObs =prepare_observation_transform(obsTransform,Y,condMean,condCov,nPerGroup)
-algoSettings_iplf = (;algoSettings...,scaling = scaling,stateSamplingMethod = :ffbs_slr)
+algoSettings_iplf = (;algoSettings...,scaling = scaling, nMaxIter=10, stateSamplingMethod = :ffbs_slr)
 dataSettings_iplf = (y = y,X = X,covSel = covSel,nPerGroup = nPerGroup)
 modelSettings_iplf = (;modelSettings...,slrObs = slrObs)
 
-Random.seed!(1)
-θpost_iplf3, groupSizes_iplf, nFailure_iplf =GibbsTVGLM(dataSettings_iplf,priorSettings,modelSettings_iplf,algoSettings_iplf)
+#Random.seed!(1)
+θpost_iplf_delta1_loglink, groupSizes_iplf, nFailure_iplf = GibbsTVGLM(dataSettings_iplf,priorSettings,modelSettings_iplf,algoSettings_iplf)
+# For me: without contrained version: covariances are singular, fails
+# For me: constrained version, delta=0.5: better
+# For me: constrained version, delta=0.5, diffrenet seed, smaller offsets: better
+# Check why innovation gain is not PD at some iterations still
+# Now running centered and delta 0.5 - bad
+# weighted better
+
 prcFailure_iplf =100 * nFailure_iplf[] /(algoSettings_iplf.nBurn + algoSettings_iplf.nIter)
 println("$(algoSettings_iplf.stateSamplingMethod) failed at ","$(prcFailure_iplf)% of the simulated trajectories")
 
-θpost_iplf = copy(θpost_iplf3)
-quant_paramtime_iplf =quantile_multidim(θpost_iplf,[0.025, 0.5, 0.975],dims = 3)
+#θpost_iplf_constrained  = copy(θpost_iplf3)
+θpost_iplf              = copy(θpost_iplf_delta1_loglink)
+#θpost_iplf              = copy(θpost_iplf_delta05_2)
 
+#quant_paramtime_iplf_05_2    = quantile_multidim(θpost_iplf,[0.025, 0.5, 0.975],dims = 3)
+θpost_iplf_delta1_loglink    = quantile_multidim(θpost_iplf,[0.025, 0.5, 0.975],dims = 3)
+#quant_paramtime_iplf_05    = quantile_multidim(θpost_iplf,[0.025, 0.5, 0.975],dims = 3)
+#quant_paramtime_iplf_new    = quantile_multidim(θpost_iplf,[0.025, 0.5, 0.975],dims = 3)
 
 plt_overlay = plot(layout = (3, 1),size = (900, 650),legend = :topright)
-PlotPostParamEvolution!(plt_overlay,quant_paramtime_iplf,"IPLF",groupSizes_iplf;
-                        dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[4])
+PlotPostParamEvolution!(plt_overlay,θpost_iplf_delta1_loglink,"IPLF",groupSizes_iplf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[4])
+
 display(plt_overlay)
 
 # ============================================================
@@ -238,51 +282,44 @@ obsTransform =
     end
 
 # Same transformed/grouped observation setup as IPLF
-Y, _, _, groupSizes_iekf =
-    splitEqualGroups(y, X, covSel, nPerGroup)
-
-slrObs =
-    prepare_observation_transform(
-        obsTransform,
-        Y,
-        condMean,
-        condCov,
-        nPerGroup
-    )
+Y, _, _, groupSizes_iekf =splitEqualGroups(y, X, covSel, nPerGroup)
+slrObs = prepare_observation_transform(obsTransform,Y,condMean,condCov,nPerGroup)
 
 # IEKF algorithm
-algoSettings_iekf = (
-    ;
-    algoSettings...,
-    scaling = scaling,
-    stateSamplingMethod = :ffbs_iekf
-)
-
-dataSettings_iekf = (
-    y = y,
-    X = X,
-    covSel = covSel,
-    nPerGroup = nPerGroup
-)
+algoSettings_iekf = (;algoSettings...,scaling = scaling, nMaxIter=1, stateSamplingMethod = :ffbs_iekf)
+dataSettings_iekf = (y = y,X = X,covSel = covSel,nPerGroup = nPerGroup)
 
 # Add IEKF-specific functions ONLY to this modelSettings object
-modelSettings_iekf = (
-    ;
-    modelSettings...,
-    slrObs = slrObs,
-    sufficient_condMoments_IEKF = BetaSuffStatsCondMoments,
-    sufficient_condJacobian = BetaSuffStatsJacobian
-)
+modelSettings_iekf = (;modelSettings...,slrObs = slrObs,sufficient_condMoments_IEKF = BetaSuffStatsCondMoments,sufficient_condJacobian = BetaSuffStatsJacobian)
 
 Random.seed!(1)
-
-θpost_iekf, groupSizes_iekf, nFailure_iekf =GibbsTVGLM(dataSettings_iekf,priorSettings,modelSettings_iekf,algoSettings_iekf)
+θpost_ekf, groupSizes_iekf, nFailure_iekf =GibbsTVGLM(dataSettings_iekf,priorSettings,modelSettings_iekf,algoSettings_iekf)
 prcFailure_iekf =100 * nFailure_iekf[] /(algoSettings_iekf.nBurn + algoSettings_iekf.nIter)
 println("$(algoSettings_iekf.stateSamplingMethod) failed at ","$(prcFailure_iekf)% of the simulated trajectories")
 
-quant_paramtime_iekf =quantile_multidim( θpost_iekf,[0.025, 0.5, 0.975],dims=3)
-#PlotPostParamEvolution!(plt_overlay,quant_paramtime_iekf,"IPLF",groupSizes_iplf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[2])
-#display(plt_overlay)
+### Grouped by 5, iter =10
+#quant_paramtime_iekf =quantile_multidim( θpost_iekf,[0.025, 0.5, 0.975],dims=3)
+quant_paramtime_ekf =quantile_multidim( θpost_ekf,[0.025, 0.5, 0.975],dims=3)
+plt_overlay = plot(layout = (3, 1),size = (900, 650),legend = :topright)
+PlotPostParamEvolution!(plt_overlay,quant_paramtime_laplace,"Laplace (Newton otpim.)",groupSizes_laplace;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[1])
+PlotPostParamEvolution!(plt_overlay,quant_paramtime_iekf,"IEKF (new constraints)",groupSizes_iekf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[2])
+#PlotPostParamEvolution!(plt_overlay,quant_paramtime_iplf_new ,"IPLF (new constraints)",groupSizes_iplf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[4])
+PlotPostParamEvolution!(plt_overlay,quant_paramtime_iplf_05_2 ,"IPLF (new constraints)",groupSizes_iplf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[4])
+#quant_paramtime_iplf_05_2 : -with shoulders and weighted -good
+
+#PlotPostParamEvolution!(plt_overlay,quant_paramtime_ekf,"EKF",groupSizes_iekf;
+#dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[6])
+display(plt_overlay)#
+savefig(plt_overlay,joinpath(save_dir, "laplace_iplf_iekf_constrained2.pdf"))
+
+plt_overlay = plot(layout = (3, 1),size = (900, 650),legend = :topright)
+PlotPostParamEvolution!(plt_overlay,quant_paramtime_laplace,"Laplace",groupSizes_laplace;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[1])
+PlotPostParamEvolution!(plt_overlay,quant_paramtime_ekf,"EKF",groupSizes_iekf;
+dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[3])
+display(plt_overlay)
+
+
+
 
 #θpost_ekf=copy(θpost_iekf)
 
@@ -290,6 +327,10 @@ quant_paramtime_iekf =quantile_multidim( θpost_iekf,[0.025, 0.5, 0.975],dims=3)
 # 3. OVERLAY PLOT
 # ============================================================
 plt_overlay = plot(layout = (3, 1),size = (900, 650),legend = :topright)
+PlotPostParamEvolution!(plt_overlay,quant_paramtime_iekf,"IEKF",groupSizes_iekf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[6])
+#PlotPostParamEvolution!(plt_overlay,quant_paramtime_iplf,"IPLF",groupSizes_iplf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[2])
+PlotPostParamEvolution!(plt_overlay,quant_paramtime_laplace,"Laplace",groupSizes_laplace;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[1])
+display(plt_overlay)
 
 # ------------------------------------------------------------
 # Laplace
@@ -300,13 +341,14 @@ PlotPostParamEvolution!(plt_overlay,quant_paramtime_laplace,"Laplace",groupSizes
 # IPLF
 # ------------------------------------------------------------
 
-PlotPostParamEvolution!(plt_overlay,quant_paramtime_iplf2,"IPLF",groupSizes_iplf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[2])
+PlotPostParamEvolution!(plt_overlay,quant_paramtime_iplf,"IPLF",groupSizes_iplf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[2])
 
 # ------------------------------------------------------------
 # IEKF
 # ------------------------------------------------------------
 
 PlotPostParamEvolution!(plt_overlay,quant_paramtime_iekf,"IEKF",groupSizes_iplf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[6])
+
 display(plt_overlay)
 
 # ============================================================
@@ -318,6 +360,7 @@ display(plt_overlay)
 #θpost_iplf1=copy(θpost_iplf)#centered, alpga=1, beta=0, kappa=0
 #savefig(plt_overlay,joinpath(save_dir, "laplace_iplf_ekf_overlay_layoff.pdf"))
 #savefig(plt_overlay,joinpath(save_dir, "laplace_iplf_iekfwithtricks_layoff.pdf"))
+#savefig(plt_overlay,joinpath(save_dir, "laplace_iplf_iekf_withtricks_both_IPLF_and_IEKF_layoff.pdf"))
 
 
 

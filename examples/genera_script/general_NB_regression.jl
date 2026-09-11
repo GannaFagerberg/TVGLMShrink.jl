@@ -1,9 +1,12 @@
 # Beta regression with fixed path parameter evolution
 
-#using Pkg
-#Pkg.activate(joinpath(@__DIR__, "../.."))
-#cd(joinpath(@__DIR__, "../.."))
+using Revise
+using Pkg
+Pkg.activate(joinpath(@__DIR__, "../.."))
+cd(joinpath(@__DIR__, "../.."))
 using TVGLMShrink
+
+
 using Distributions, LaTeXStrings, Plots, LinearAlgebra, Measures, Random
 using PDMats, LogExpFunctions
 using SMCsamplers, DynamicGlobalLocalShrinkage
@@ -157,12 +160,9 @@ link_nb = (LogLinLink(),)
 # IDENTICAL to reference NB simulation
 # ============================================================
 
-#γ = [t < T / 2 ? -1.5 : 0.0 for t in 1:T]
+γ = [t < T / 2 ? -1.5 : 0.0 for t in 1:T]
 
-γ = [
-    t < T / 2 ? 1.0 : 3.0
-    for t in 1:T
-]
+#γ = [t < T / 2 ? 1.0 : 3.0 for t in 1:T]
 
 
 
@@ -174,9 +174,10 @@ link_nb = (LogLinLink(),)
 # ψtime = exp.(γ1)
 # ============================================================
 
-rtime =exp.(γ)
+#rtime =exp.(γ)
+rtime = linkinv.(Ref(link[2]), γ)
 
-
+plot(rtime)
 # ============================================================
 # Negative Binomial parameterization
 #
@@ -349,7 +350,7 @@ priorSettings = (
     ϕ₀=0.5, κ₀=0.3,             # Prior for ϕ ~ N(ϕ₀, κ₀²)
     m₀=-15.0, σ₀=3.0,           # Prior for μ ~ N(m₀, σ₀²)
     ν₀= 3.0, ψ₀= 1,               # Prior for σ²ₙ ~ scaled inverse χ²(ν₀, ψ₀)
-     μ₀=zeros(p+q), Σ₀=I(p+q), n₀ = 1, # Prior for βₜ at time t=0
+    μ₀=zeros(p+q), Σ₀=I(p+q), n₀ = 1, # Prior for βₜ at time t=0
 );
 
 modelSettings = (
@@ -380,7 +381,7 @@ algoSettings = (
         nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
         offsetMethod=eps(),       # Offset for log-volatility
         h_upper=Inf,              # Upper bound for log-volatility
-        polyaoffset=0.00,          # Offset for Polya-Gamma variables in the update of h_t
+        polyaoffset=0.01,          # Offset for Polya-Gamma variables in the update of h_t
         scaling=:none,            # Scaling of state innov, can be :full, :diagonal or :none
         FisherInfo=FisherInfoNB,# Fisher info
         nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
@@ -393,7 +394,7 @@ algoSettings = (
     results = []
     interpMethod = :linear
     scaling = :none
-    nPerGroup = 10
+    nPerGroup = 5
 
 # ============================================================
 # Common settings
@@ -414,53 +415,9 @@ save_dir = joinpath(
 
 mkpath(save_dir)
 
-
 # ============================================================
-# 1. LAPLACE
+# 2. IPLF
 # ============================================================
-
-methodlabel = "Laplace-None"
-
-algoSettings_laplace = (
-    ;
-    algoSettings...,
-    scaling = scaling,
-    stateSamplingMethod = :ffbs_laplace
-)
-
-dataSettings_laplace = (
-    y = y,
-    X = X,
-    covSel = covSel,
-    nPerGroup = nPerGroup
-)
-
-θpost_laplace, groupSizes_laplace, nFailure_laplace =
-    GibbsTVGLM(
-        dataSettings_laplace,
-        priorSettings,
-        modelSettings,
-        algoSettings_laplace
-    )
-
-prcFailure_laplace =
-    100 * nFailure_laplace[] /
-    (algoSettings_laplace.nBurn + algoSettings_laplace.nIter)
-
-println(
-    "$(algoSettings_laplace.stateSamplingMethod) failed at ",
-    "$(prcFailure_laplace)% of the simulated trajectories"
-)
-
-quant_paramtime_laplace =
-    quantile_multidim(
-        θpost_laplace,
-        [0.025, 0.5, 0.975],
-        dims = 3
-    )
-
-
-
 
 # ============================================================
 # 2. IPLF
@@ -531,7 +488,53 @@ quant_paramtime_iplf =
         dims = 3
     )
 
+plt_overlay          = plot_param_path_betareg(β,γ)
+PlotPostParamEvolution!(plt_overlay,quant_paramtime_iplf,"IPLF",groupSizes_iplf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[1])
 
+
+# ============================================================
+# 1. LAPLACE
+# ============================================================
+
+methodlabel = "Laplace-None"
+
+algoSettings_laplace = (
+    ;
+    algoSettings...,
+    scaling = scaling,
+    stateSamplingMethod = :ffbs_laplace
+)
+
+dataSettings_laplace = (
+    y = y,
+    X = X,
+    covSel = covSel,
+    nPerGroup = nPerGroup
+)
+
+θpost_laplace, groupSizes_laplace, nFailure_laplace =
+    GibbsTVGLM(
+        dataSettings_laplace,
+        priorSettings,
+        modelSettings,
+        algoSettings_laplace
+    )
+
+prcFailure_laplace =
+    100 * nFailure_laplace[] /
+    (algoSettings_laplace.nBurn + algoSettings_laplace.nIter)
+
+println(
+    "$(algoSettings_laplace.stateSamplingMethod) failed at ",
+    "$(prcFailure_laplace)% of the simulated trajectories"
+)
+
+quant_paramtime_laplace =
+    quantile_multidim(
+        θpost_laplace,
+        [0.025, 0.5, 0.975],
+        dims = 3
+    )
 
 
 
@@ -541,10 +544,7 @@ quant_paramtime_iplf =
 # Start from truth, then add Laplace and IPLF to same plot
 # ============================================================
 
-plt_overlay = plot_param_path_betareg(
-    β,
-    γ
-)
+plt_overlay = plot_param_path_betareg(β,γ)
 
 
 # ------------------------------------------------------------

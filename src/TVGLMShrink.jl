@@ -5,6 +5,8 @@ using PDMats, LogExpFunctions
 using SMCsamplers, DynamicGlobalLocalShrinkage, Utils
 using GLM: Link, CauchitLink, ProbitLink,CloglogLink
 import GLM
+import Optim
+import ForwardDiff
 import GLM: linkfun, linkinv, mueta
 export linkfun, linkinv, mueta
 export LogLinLink,
@@ -30,12 +32,12 @@ struct IdentityTransform <: AbstractObsTransform end
 include("TVGLM_TransformedFFBS_KF.jl")
 include("TVGLM_Gibbs.jl")
 include("BetaModelSufficient.jl")
-include("BetaModelSufficient_single.jl")
+#include("BetaModelSufficient_single.jl")
 include("GammaModelSufficient.jl")
 include("NBModelSufficient.jl")
-include("IEKF_cond_fns.jl")
+include("TVGLM_IEKF_ffbs_kf.jl")
 
-export FFBS_SLR_transformed!, FFBS_SLR_transformed_scaling!!, GibbsTVGLM
+export FFBS_SLR_transformed!, FFBS_SLR_transformed_scaling!, GibbsTVGLM
 export BetaSuffStats, BetaSuffStatsGrouped, BetaSuffStatsAveraged, prepare_observation_transform
 export BetaSingleSuffStatGrouped
 export prepare_observation_transform
@@ -43,6 +45,7 @@ export GammaSuffStatsAveraged,  GammaSuffStatsGrouped
 export fisher_gamma_blocks, FisherInfoGamma
 export fisher_nb_blocks, FisherInfoNB, NBFactorialStatsAveraged, NBFactorialStatsGrouped
 export FFBS_IEKF_transformed!, kalmanfilter_update_transformed_IEKF, BetaSuffStatsCondMoments, BetaSuffStatsJacobian
+export FFBS_laplace_constrained!
 
 include("TVGLMPlots.jl")
 export PlotPostParamEvolution, PlotPostParamEvolution!, postPredCheckDistr

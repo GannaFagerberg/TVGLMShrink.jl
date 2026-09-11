@@ -1,4 +1,79 @@
 
+# ============================================================
+# Beta sufficient-statistic observation helpers
+#
+# Parameterisation:
+#
+# Y | μ, κ ~ Beta(α, β)
+#
+# with the mean-concentration reparameterisation
+#
+#     α = μκ
+#     β = (1 - μ)κ
+#
+# so that
+#
+# E[Y]   = μ
+# Var[Y] = μ(1 - μ)/(κ + 1)
+#
+# The model parameters are obtained from the latent-state
+# predictors through
+#
+#     μ = g_μ^{-1}(η_μ)
+#     κ = g_κ^{-1}(η_κ)
+#
+# and are then reparameterised to the Beta shape parameters
+# α and β above.
+#
+# Observation transformation:
+#
+#     z(y) =
+#     [
+#         log(y),
+#         log(1 - y)
+#     ]
+#
+# These are the two canonical sufficient statistics of the
+# two-parameter Beta family.
+#
+# For a group of conditionally independent observations,
+# the code supports three representations:
+#
+# 1. Grouped:
+#
+#     z =
+#     [
+#         log(Y_1), ..., log(Y_g),
+#         log(1-Y_1), ..., log(1-Y_g)
+#     ]
+#
+# 2. Summed:
+#
+#     z =
+#     [
+#         sum_i log(Y_i),
+#         sum_i log(1-Y_i)
+#     ]
+#
+# 3. Averaged:
+#
+#     z̄ =
+#     [
+#         mean_i log(Y_i),
+#         mean_i log(1-Y_i)
+#     ]
+#
+# The conditional means and covariance matrices of these
+# transformed observations are computed analytically from
+# the corresponding digamma and trigamma expressions.
+#
+# The summed representation is the minimal canonical
+# sufficient-statistic representation for a group of
+# iid Beta observations; the averaged representation is
+# its nonsingular linear rescaling.
+# ============================================================
+
+
 # Extract individual conditional variances
 function _beta_variance_vector(value, group_size::Int)
 
@@ -41,7 +116,7 @@ end
 function beta_sufficient_observation_grouped(
     y;
     clip::Bool=false,
-    boundary::Real=1e-12
+    boundary::Real=1e-15
 )
 
     y_group = _beta_vector(y, "y")
@@ -83,9 +158,9 @@ function make_beta_sufficient_statistics_adapters_grouped(
     raw_condMean,
     raw_condCov;
     variance_denominator_offset::Real = 1.0,
-    mean_boundary::Real = 1e-12,
-    min_concentration::Real = 1e-10,
-    shape_floor::Real = 1e-6
+    mean_boundary::Real = 1e-15,
+    min_concentration::Real = 1e-15,
+    shape_floor::Real = 1e-5
 )
 
     function beta_shapes_from_original_model(
@@ -128,21 +203,6 @@ function make_beta_sufficient_statistics_adapters_grouped(
             alpha_raw = μ .* κ
             beta_raw  = (1.0 .- μ) .* κ
 
-            #if any(alpha_raw .< shape_floor) ||
-            #any(beta_raw .< shape_floor)
-
-              #  @show t
-
-               # @show extrema(ημ)
-               # @show extrema(μ)
-
-               # @show extrema(ηκ)
-                #@show extrema(κ)
-
-               # @show minimum(alpha_raw)
-               # @show minimum(beta_raw)
-            #end
-            
             # Numerical regularization for sufficient-statistic moments
             alpha_shape =
                 max.(
@@ -265,7 +325,7 @@ end
 function beta_sufficient_observation_summed(
     y;
     clip::Bool = false,
-    boundary::Real = 1e-12
+    boundary::Real = 1e-15
 )
 
     y_group = _beta_vector(y, "y")
@@ -315,7 +375,7 @@ end
 function beta_sufficient_observation_averaged(
     y;
     clip::Bool = false,
-    boundary::Real = 1e-12
+    boundary::Real = 1e-15
 )
 
     y_group = _beta_vector(y, "y")
@@ -366,8 +426,8 @@ function make_beta_sufficient_statistics_adapters_averaged(
     raw_condMean,
     raw_condCov;
     variance_denominator_offset::Real = 1.0,
-    mean_boundary::Real = 1e-12,
-    min_concentration::Real = 1e-10
+    mean_boundary::Real = 1e-15,
+    min_concentration::Real = 1e-15
 )
 
     # ==========================================================
@@ -574,8 +634,8 @@ function make_beta_sufficient_statistics_adapters_summed(
     raw_condMean,
     raw_condCov;
     variance_denominator_offset::Real = 1.0,
-    mean_boundary::Real = 1e-12,
-    min_concentration::Real = 1e-10
+    mean_boundary::Real = 1e-15,
+    min_concentration::Real = 1e-15
 )
 
     # ==========================================================
@@ -786,9 +846,9 @@ end
 
 function BetaSuffStatsGrouped(;
     variance_denominator_offset::Real = 1.0,
-    mean_boundary::Real = 1e-12,
-    min_concentration::Real = 1e-10,
-    shape_floor::Real = 1e-6
+    mean_boundary::Real = 1e-15,
+    min_concentration::Real = 1e-15,
+    shape_floor::Real = 1e-15
 )
 
     return BetaSuffStats(
@@ -818,8 +878,8 @@ end
 
 function BetaSuffStatsAveraged(;
     variance_denominator_offset::Real = 1.0,
-    mean_boundary::Real = 1e-12,
-    min_concentration::Real = 1e-10
+    mean_boundary::Real = 1e-15,
+    min_concentration::Real = 1e-15
 )
 
     return BetaSuffStats(
@@ -874,12 +934,11 @@ function prepare_observation_transform(
 end
 
 #### Beta sufficient scaling
-
 function BetaSingleSuffStatGrouped(
     stat::Symbol;
-    mean_boundary::Real = 1e-12,
-    min_concentration::Real = 1e-10,
-    shape_floor::Real = 1e-6
+    mean_boundary::Real = 1e-15,
+    min_concentration::Real = 1e-15,
+    shape_floor::Real = 1e-15
 )
 
     stat in (:logy, :log1my) ||

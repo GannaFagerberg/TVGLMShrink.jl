@@ -196,6 +196,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     end
 
     nFailure = Ref(0)
+    nLaplaceFailure =  Ref(0)
 
     ### For transformed-observation filters
     if stateSamplingMethod == :ffbs_slr ||
@@ -228,7 +229,8 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
 
         if stateSamplingMethod == :ffbs_laplace
             if scaling === :none
-                FFBS_laplace!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param; max_iter=nMaxIter, nFailure=nFailure)
+                #FFBS_laplace!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param; max_iter=nMaxIter, nFailure=nFailure)
+                FFBS_laplace_constrained!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param; max_iter=nMaxIter, nFailure=nFailure, nLaplaceFailure=nLaplaceFailure)
             else
                 FFBS_laplace!(θ, U, Y, A, B, param.Σᵥ, μ₀, Σ₀, observation, param, ScaleMat, Svec; max_iter=nMaxIter, nFailure=nFailure)
             end
@@ -308,7 +310,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     end
 
     #return θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure, Svec_collect
-    return θpost, groupSizes, nFailure
+    return θpost, groupSizes, nFailure, nLaplaceFailure
 end
 
 

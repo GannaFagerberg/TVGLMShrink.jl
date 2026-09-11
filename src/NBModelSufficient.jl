@@ -34,36 +34,6 @@
 # existing IPLF infrastructure requires no changes.
 # ============================================================
 
-
-const NB_LOG1P_CACHE =
-    Dict{Tuple{Float64,Float64}, NTuple{3,Float64}}()
-
-function _nb_log1p_moments_cached(
-    μ::Real,
-    r::Real;
-    digits::Int = 2 #3
-)
-
-    μsafe = max(float(μ), 1e-12)
-    rsafe = max(float(r), 1e-12)
-
-    # Cache on log-parameter scale
-    key = (
-        round(log(μsafe), digits = digits),
-        round(log(rsafe), digits = digits)
-    )
-
-    return get!(NB_LOG1P_CACHE, key) do
-
-        _nb_log1p_moments(
-            μsafe,
-            rsafe;
-            tol = 1e-8,
-            maxiter = 10_000
-        )
-    end
-end
-
 struct NBSuffStats{F1,F2,F3} <: AbstractObsTransform
     transform_obs::F1
     make_cond_moments::F2
@@ -749,6 +719,7 @@ end
 ### Fisher
 ############
 
+
 function fisher_nb_size(
     μ,
     r;
@@ -756,37 +727,73 @@ function fisher_nb_size(
     maxiter::Int = 100_000
 )
 
-    μ = max(μ, 1e-12)
-    r = max(r, 1e-8)
+    μ = max(float(μ), 1e-12)
+    r = max(float(r), 1e-8)
 
     p = r / (r + μ)
     q = μ / (r + μ)
 
-    py = p^r
+    # P(Y = 0)
+    py = exp(r * log(p))
     cdf = py
 
-    s = max(1.0 - cdf, 0.0) / r^2
-
-    j = 0
-
-    while (1.0 - cdf > tol) && (j < maxiter)
-
-        j += 1
-
-        py *= ((j - 1 + r) / j) * q
-        cdf += py
-
-        survival = max(1.0 - cdf, 0.0)
-
-        s += survival / (r + j)^2
-    end
+    # Score wrt r for y = 0
+    #
+    # s_r(y) =
+    # ψ(r+y) - ψ(r)
+    # - log(1 + μ/r)
+    # + (μ-y)/(r+μ)
+    #
+    # For y=0, the digamma difference is zero.
+    score_r =
+        -log1p(μ / r) +
+        μ / (r + μ)
 
     Irr =
-        s -
-        μ / (r * (μ + r))
+        py * score_r^2
 
-    return max(Irr, eps(Float64))
+    # ψ(r+y)-ψ(r)
+    # = sum_{k=0}^{y-1} 1/(r+k)
+    digamma_diff =
+        0.0
+
+    y =
+        0
+
+    while (
+        max(1.0 - cdf, 0.0) > tol
+    ) && (
+        y < maxiter
+    )
+
+        y += 1
+
+        # Recursive NB probability
+        py *=
+            ((y - 1 + r) / y) *
+            q
+
+        # Update ψ(r+y)-ψ(r)
+        digamma_diff +=
+            1.0 / (r + y - 1)
+
+        score_r =
+            digamma_diff -
+            log1p(μ / r) +
+            (μ - y) / (r + μ)
+
+        Irr +=
+            py * score_r^2
+
+        cdf +=
+            py
+    end
+
+    return max(Irr, 0.0)
 end
+
+
+
 
 function fisher_nb_blocks(
     Xm,
@@ -1025,11 +1032,12 @@ function make_nb_factorial_statistics_adapters_grouped(
             mean_log,
             second_log,
             mean_y_log =
-                _nb_log1p_moments_cached(
+                _nb_log1p_moments(
                     μi,
-                    ri
+                    ri;
+                    tol = 1e-8,
+                    maxiter = 10_000
                 )
-
 
             # --------------------------------------------------------
             # Conditional covariance components

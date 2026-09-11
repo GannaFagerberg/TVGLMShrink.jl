@@ -20,7 +20,6 @@ Random.seed!(slurm_id);
 include(joinpath(@__DIR__, "../..") * "/examples/betareg/BetaModel.jl") # BetaReg stuff
 include(joinpath(@__DIR__, "../..") * "/examples/betareg/BetaModelUtils.jl") # BetaReg stuff
 
-
 gr(legend=:topleft, grid=false, color=colors[2], lw=2, legendfontsize=12,
     xtickfontsize=12, ytickfontsize=12, xguidefontsize=12, yguidefontsize=12,
     titlefontsize=18, markerstrokecolor=:auto)
@@ -29,14 +28,14 @@ dataFolder = joinpath(@__DIR__, "data")
 figFolder = joinpath(@__DIR__, "figs/")
 resFolder = joinpath(@__DIR__, "results/")
 
-
-
 ## observation data
 applName = "layoff_vix" # all save files with this prefix
 df = CSV.read(dataFolder * "/layoff_data.csv", DataFrame)
+
 maxlag = 1 # maximum lag for the covariates, so we remove nLags first rows
 df = df[(maxlag+1):end, :]
 println("$(sum(ismissing.(eachrow(df)))) observations with missing values")
+
 y = df.layoff_share # df.layoff_share
 T = size(y, 1)
 dates = df.date
@@ -93,8 +92,8 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
-    nIter=10000,              # Number of iterations in the Gibbs sampler
-    nBurn=3000,               # Number of burn-in iterations
+    nIter=2000,              # Number of iterations in the Gibbs sampler
+    nBurn=2000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility
@@ -116,7 +115,7 @@ interpMethod = :linear
 
 # No scaling and nPerGroup = 3
 scaling = :none
-nPerGroup = 5
+nPerGroup = 1
 
 ## PGAS 
 methodlabel = "PGAS"
@@ -144,8 +143,8 @@ methodlabel = "Laplace"
 algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_laplace);
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
 
-θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
-    priorSettings, modelSettings, algoSettings);
+#θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,priorSettings, modelSettings, algoSettings);
+θpost,  groupSizes, nFailure, _= GibbsTVGLM(dataSettings,priorSettings, modelSettings, algoSettings);
 
 prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
 println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
@@ -154,12 +153,15 @@ println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)%
 # Parameter quantiles on the parameter time scale - this always includes t=0
 quant_paramtime = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 
+plt = plot(layout = (3, 1),size = (900, 650),legend = :topright)
 PlotPostParamEvolution!(plt, quant_paramtime, methodlabel, groupSizes;
     dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=3, c=colors[3])
-plot(plt..., layout=(3, 1), size=(1000, 1200), margin=3mm)
+display(plt)
 
-savefig(figFolder * "$(applName)_$(algoSettings.scaling)_$(dataSettings.nPerGroup)_dsp.svg")
-savefig(figFolder * "$(applName)_$(algoSettings.scaling)_$(dataSettings.nPerGroup)_dsp.pdf")
+#plot(plt..., layout=(3, 1), size=(1000, 1200), margin=3mm)
+
+#savefig(figFolder * "$(applName)_$(algoSettings.scaling)_$(dataSettings.nPerGroup)_dsp.svg")
+#savefig(figFolder * "$(applName)_$(algoSettings.scaling)_$(dataSettings.nPerGroup)_dsp.pdf")
 
 
 

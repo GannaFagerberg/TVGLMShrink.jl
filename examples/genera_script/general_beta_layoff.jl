@@ -139,13 +139,13 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
-    nIter=10000,              # Number of iterations in the Gibbs sampler
+    nIter=5000,              # Number of iterations in the Gibbs sampler
     nBurn=3000,               # Number of burn-in iterations
-    nMaxIter=1,              # Maximum number of iterations for Laplace/IPLF
+    nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility
     h_upper=Inf,              # Upper bound for log-volatility
-    polyaoffset=0.00,          # Offset for Polya-Gamma variables in the update of h_t
+    polyaoffset=0.01,          # Offset for Polya-Gamma variables in the update of h_t
     scaling=:none,            # Scaling of state innov, can be :full, :diagonal or :none
     FisherInfo=FisherInfoBeta,# Fisher info
     nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
@@ -159,7 +159,7 @@ keep_t0 = false # Whether to keep the state at time t=0 in the output of the Gib
 results = []
 interpMethod = :linear
 scaling = :none
-nPerGroup = 5
+nPerGroup = 1
 
 # Where to save everything
 save_dir = joinpath(pkgdir(TVGLMShrink),"plot_res")
@@ -215,6 +215,7 @@ println("$(algoSettings_iplf.stateSamplingMethod) failed at ","$(prcFailure_iplf
 #@load joinpath(save_dir, "θpost_iplf.jld2") θpost_iplf2
 #quant_paramtime_iplf3 =quantile_multidim(θpost_iplf,[0.025, 0.5, 0.975],dims = 3)
 #quant_paramtime_iplf2 =quantile_multidim(θpost_iplf,[0.025, 0.5, 0.975],dims = 3)
+quant_paramtime_iplf =quantile_multidim(θpost_iplf,[0.025, 0.5, 0.975],dims = 3)
 
 plt_overlay = plot(layout = (3, 1),size = (900, 650),legend = :topright)
 PlotPostParamEvolution!(plt_overlay,quant_paramtime_iplf,"IPLF",groupSizes_iplf;
