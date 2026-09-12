@@ -141,9 +141,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     μpost = zeros(nState, nIter) # Store mean in log-volatility evolution
 
     offset = (offsetMethod == "kowal") ? eps() * ones(T, nState) : fill(offsetMethod, T, nState)
-
     P = zeros(T, nMixComp) # storage for mixture component probabilities
-
     prior = MvNormal(μ₀, Σ₀)
 
     ## Set up transition model for pgas
@@ -236,8 +234,8 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
             end
         elseif stateSamplingMethod == :ffbs_slr
             if scaling === :none
-                FFBS_SLR_transformed!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
-                #FFBS_SLR_transformed!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=0.5, β=1, κ=0, sample_t0=true, nFailure=nFailure)
+                #FFBS_SLR_transformed!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
+                FFBS_SLR_transformed!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=0.001, β=2, κ=0, sample_t0=true, nFailure=nFailure)
             else
                 FFBS_SLR_transformed_scaling!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀, nMaxIter, ScaleMat, Svec, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
             end
@@ -286,8 +284,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
         if innovModel == :dsp
             setOffset!(offset, ν, offsetMethod)
             if groupsize_common == 1
-                update_dsp!(ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings, mixture, Dᵩ,
-                    offset, α, β, updateσₙ, h_upper, polyaoffset)
+                update_dsp!(ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings, mixture, Dᵩ,offset, α, β, updateσₙ, h_upper, polyaoffset)
             else
                 update_dsp!(groupsize_common, ν, S, P, H, H̃, ξ, ϕ, μ, σ²ₙ, priorSettings, mixture, Dᵩ, offset, α, β, updateσₙ, h_upper, polyaoffset)
             end

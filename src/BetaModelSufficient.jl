@@ -183,17 +183,9 @@ function make_beta_sufficient_statistics_adapters_grouped(
 
             κ = max.(κ,min_concentration)
 
-            all(isfinite, μ) ||
-                throw(DomainError(
-                    μ,
-                    "Non-finite Beta mean."
-                ))
+            all(isfinite, μ) || throw(DomainError(μ,"Non-finite Beta mean."))
 
-            all(isfinite, κ) ||
-                throw(DomainError(
-                    κ,
-                    "Non-finite Beta concentration."
-                ))
+            all(isfinite, κ) || throw(DomainError(κ,"Non-finite Beta concentration."))
 
             # Raw Beta shapes implied by the model
             alpha_raw = μ .* κ

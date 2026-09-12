@@ -1,8 +1,8 @@
 # Beta regression with fixed path parameter evolution
-
-#using Pkg
-#Pkg.activate(joinpath(@__DIR__, "../.."))
-#cd(joinpath(@__DIR__, "../.."))
+using Revise
+using Pkg
+Pkg.activate(joinpath(@__DIR__, "../.."))
+cd(joinpath(@__DIR__, "../.."))
 using TVGLMShrink
 using Distributions, LaTeXStrings, Plots, LinearAlgebra, Measures, Random
 using PDMats, LogExpFunctions
@@ -68,7 +68,8 @@ function simulate_μ(X, T, p, link, β₀)
     return β[2:end, :], λtime[2:end]
 end
 
-γ = [t < T / 2 ? 1 : 3 for t in 1:T]
+#γ = [t < T / 2 ? 1 : 3 for t in 1:T]
+γ = [t < T / 2 ? 1 : 9 for t in 1:T]
 
 ψtime = exp.(γ)
 BetaMean(μ, ψ) = Beta(1.0e-15 + μ * ψ, 1.0e-15 + (1 - μ) * ψ)
@@ -105,9 +106,12 @@ link = (LogitLink(), LogLinLink()) # best so far
 # ==========================================================
 # SIMULATE OBSERVATIONS
 # ==========================================================
+sum(y==1)
+sum(y==0)
 
-y = clamp.(y, 1e-16, 1 - 1e-16)
+y = clamp.(y, 1e-12, 1 - 1e-12)
 plot(y)
+
 
 # ==========================================================
 # VARIABLES KEPT FOR COMPATIBILITY WITH LATER CODE
@@ -115,10 +119,10 @@ plot(y)
 # There are no actual regressors.
 # X contains only the intercept column.
 
-X     = X_regressors[2:end,:]
-covSel = [[1,2], [1]]
-p = length(covSel[1])
-q = length(covSel[2])
+X        = X_regressors[2:end,:]
+covSel   = [[1,2], [1]]
+p        = length(covSel[1])
+q        = length(covSel[2])
 
 # No covariate-generating AR processes
 #ρ  = Float64[]
@@ -140,8 +144,8 @@ f_ϕ(x) = priorparam[2] - linkinv(link[2], x)
 β_ϕ0 = [find_zero(f_ϕ, 0.0); zeros(q - 1)]
 
 μ₀ = [β_m0; β_ϕ0]
-κ₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
-Σ₀ = :fisherinfo # Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
+#n₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
+Σ₀ = :fisherinfo # Σ₀ = (1 / n₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
 ## Set up the prior, model and algorithm settings
 
 
@@ -207,7 +211,7 @@ algoSettings = (
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility
     h_upper=Inf,              # Upper bound for log-volatility
-    polyaoffset=0.00,          # Offset for Polya-Gamma variables in the update of h_t
+    polyaoffset=0.01,          # Offset for Polya-Gamma variables in the update of h_t
     scaling=:none,            # Scaling of state innov, can be :full, :diagonal or :none
     FisherInfo=FisherInfoBeta,# Fisher info
     nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
@@ -268,11 +272,12 @@ obsTransform =
 
 Y, _, _, groupSizes_iplf =splitEqualGroups(y,X,covSel,nPerGroup)
 slrObs =prepare_observation_transform(obsTransform,Y,condMean,condCov,nPerGroup)
-algoSettings_iplf = (;algoSettings...,    nMaxIter=10, scaling = scaling,stateSamplingMethod = :ffbs_slr)
+algoSettings_iplf = (;algoSettings..., nMaxIter=10, scaling = scaling,stateSamplingMethod = :ffbs_slr)
 dataSettings_iplf = (y = y,X = X,covSel = covSel,nPerGroup = nPerGroup)
 modelSettings_iplf = (;modelSettings...,slrObs = slrObs)
+priorSettings_iplf = (;priorSettings..., n₀ = 1)
 
-θpost_iplf, groupSizes_iplf, nFailure_iplf =GibbsTVGLM(dataSettings_iplf, priorSettings,modelSettings_iplf,algoSettings_iplf)
+θpost_iplf, groupSizes_iplf, nFailure_iplf =GibbsTVGLM(dataSettings_iplf, priorSettings_iplf,modelSettings_iplf,algoSettings_iplf)
 prcFailure_iplf =100 * nFailure_iplf[] /(algoSettings_iplf.nBurn + algoSettings_iplf.nIter)
 println("$(algoSettings_iplf.stateSamplingMethod) failed at ","$(prcFailure_iplf)% of the simulated trajectories")
 
@@ -281,6 +286,8 @@ plt_overlay = plot_param_path_betareg(β,γ)
 PlotPostParamEvolution!(plt_overlay,quant_paramtime_iplf,"IPLF",groupSizes_iplf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[4])
 display(plt_overlay)
 
+## The initial values 
+#plot(y)
 # ============================================================
 # 3. IEKF
 # ============================================================
@@ -321,7 +328,7 @@ quant_paramtime_iekf = quantile_multidim( θpost_iekf,[0.025, 0.5, 0.975],dims=3
 plt_overlay = plot_param_path_betareg(β,γ)
 PlotPostParamEvolution!(plt_overlay,quant_paramtime_iekf,"IEKF",groupSizes_iekf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[2])
 #PlotPostParamEvolution!(plt_overlay,quant_paramtime_iplf,"IPLF",groupSizes_iplf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[4])
-PlotPostParamEvolution!(plt_overlay,quant_paramtime_laplace,"Laplace",groupSizes_laplace;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[1])
+#PlotPostParamEvolution!(plt_overlay,quant_paramtime_laplace,"Laplace",groupSizes_laplace;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[1])
 display(plt_overlay)
 
 # ============================================================
