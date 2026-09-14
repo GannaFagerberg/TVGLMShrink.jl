@@ -358,7 +358,7 @@ function kalmanfilter_update_transformed_IPLF(
     w_mean::AbstractVector,
     w_cov::AbstractVector,
     ws;
-    tol::Real = 1e-3,
+    tol::Real = 1e-2,
     covariance_floor::Real = 1e-8,
     return_diagnostics::Bool = false,
 )
@@ -386,11 +386,10 @@ function kalmanfilter_update_transformed_IPLF(
     weighted_mean = true
     Joseph        = false
 
-    precision_idx = 3
-    #delta_gamma   = 1.0
+    precision_idx = length(mu_iter)
+    #delta_gamma  = 1.0
     delta_gamma   = 0.5
-    #precision_link = param.link[2]
-    sd_gamma_max = 1.0      # maximum posterior SD of precision state
+    sd_gamma_max = 0.5      # maximum posterior SD of precision state
     var_gamma_max = sd_gamma_max^2
 
     # Only relevant for the hard positive link
@@ -1819,20 +1818,17 @@ function laplace_approximation_constrained(
                  #method=Optim.NewtonTrustRegion();autodiff=:forward, f_abstol=1e-6, iterations=max_iter)
 
         θ_mode = Optim.minimizer(optres)
+        
         #if Optim.iterations(optres) > 10
            #println("nIter to mode is larger than 10: $(Optim.iterations(optres))")
         #end
         
         if !Optim.converged(optres)
-
             if nFailure !== nothing
                 nFailure[] += 1
             end
-     
         end
     end
-
-
     # ========================================================
     # Laplace covariance at final mode
     # ========================================================

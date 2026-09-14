@@ -1,21 +1,6 @@
-function FFBS_IEKF_transformed!(
-    Draws,
-    U,
-    Y,
-    A,
-    B,
-    condMoments::Function,
-    condMeanJacobian::Function,
-    param,
-    Σₙ,
-    μ₀,
-    Σ₀,
-    maxIter;
-    tol=1e-8,
-    filter_output=false,
-    sample_t0=true,
-    nFailure=Ref(0)
-)
+### Without scaling
+function FFBS_IEKF_transformed!(Draws,U,Y,A,B,condMoments::Function,condMeanJacobian::Function,param,
+                                Σₙ,μ₀,Σ₀,maxIter;tol=1e-2,filter_output=false,sample_t0=true,nFailure=Ref(0))
 
     T = length(Y)
     n = length(μ₀)
@@ -66,40 +51,18 @@ function FFBS_IEKF_transformed!(
             # Control input always represented as vector.
             u = @view U[t, :]
 
-            kalmanfilter_update_transformed_IEKF(
-                μ,
-                Σ,
-                u,
-                Y[t],
-                At,
-                Bmat,
-                condMoments,
-                condMeanJacobian,
-                param,
-                Σₙt,
-                t,
-                maxIter;
-                tol=tol
-
-            )
+            kalmanfilter_update_transformed_IEKF(μ,Σ,u,Y[t],At,Bmat,condMoments,condMeanJacobian,
+                                                param,Σₙt,t,maxIter;tol=tol)
 
         catch err
-
             nFailure[] += 1
-
-            @error(
-                "Sufficient-statistics IEKF failed at time $t",
-                exception=(err, catch_backtrace())
-            )
-
+            @error("Sufficient-statistics IEKF failed at time $t",exception=(err, catch_backtrace()))
             return nothing
         end
 
         μ, Σ, μ̄, Σ̄ = filter_result
-
         μ_filter[t, :] .= μ
         Σ_filter[:, :, t] .= Σ
-
         μ_pred[t, :] .= μ̄
         Σ_pred[:, :, t] .= Σ̄
     end
@@ -107,19 +70,90 @@ function FFBS_IEKF_transformed!(
     # ----------------------------------------------------------
     # Backward sampling
     # ----------------------------------------------------------
+    SMCsamplers.BackwardSampling!(Draws,μ_filter,Σ_filter,μ_pred,Σ_pred,A,μ₀,Σ₀;sample_t0=sample_t0)
+    if filter_output
+        return μ_filter, Σ_filter
+    end
+    return nothing
+end
 
-    SMCsamplers.BackwardSampling!(
-        Draws,
-        μ_filter,
-        Σ_filter,
-        μ_pred,
-        Σ_pred,
-        A,
-        μ₀,
-        Σ₀;
-        sample_t0=sample_t0
-    )
+### Scaled vesrion
+function FFBS_IEKF_transformed_scaled!(Draws,U,Y,A,B,condMoments::Function,condMeanJacobian::Function,param,Σₙ,
+                                        μ₀,Σ₀,maxIter,ScaleMat, Svec;tol=1e-2,filter_output=false,sample_t0=true,nFailure=Ref(0))
 
+    T = length(Y)
+    n = length(μ₀)
+    q = size(U, 2)
+
+    staticA = ndims(A) != 3
+
+    # Same convention as in the IPLF code.
+    Bmat = B isa Number ? fill(float(B), n, q) : B
+
+    # ----------------------------------------------------------
+    # Filtering storage
+    # ----------------------------------------------------------
+
+    μ_filter = zeros(T, n)
+    Σ_filter = zeros(n, n, T)
+
+    μ_pred = zeros(T, n)
+    Σ_pred = zeros(n, n, T)
+
+    μ = deepcopy(μ₀)
+    Σ = deepcopy(Σ₀)
+
+    # ----------------------------------------------------------
+    # Forward filtering
+    # ----------------------------------------------------------
+
+    for t in 1:T
+
+        filter_result = try
+
+            S = ScaleMat(param, μ, t)
+            Svec[:, :, t] .= S
+
+            At = staticA ? A : (@view A[:, :, t])
+
+            # Allow static covariance, vector of covariance objects,
+
+            Σₙ_raw = if ndims(Σₙ) == 3
+                    S*(@view Σₙ[:, :, t])*S
+            elseif Σₙ isa AbstractVector
+                S*Σₙ[t]*S
+            else
+                S*Σₙ*S
+            end
+
+            Σₙt = Hermitian(
+                Matrix(Σₙ_raw) + eps(Float64) * I
+            )
+
+            # Control input always represented as vector.
+            u = @view U[t, :]
+
+            kalmanfilter_update_transformed_IEKF(μ,Σ,u,Y[t],At,Bmat,condMoments,condMeanJacobian,param,
+                                                    Σₙt,t,maxIter;tol=tol)
+
+        catch err
+            nFailure[] += 1
+            @error("Sufficient-statistics IEKF failed at time $t",exception=(err, catch_backtrace()))
+            return nothing
+        end
+
+        μ, Σ, μ̄, Σ̄ = filter_result
+
+        μ_filter[t, :] .= μ
+        Σ_filter[:, :, t] .= Σ
+        μ_pred[t, :] .= μ̄
+        Σ_pred[:, :, t] .= Σ̄
+    end
+
+    # ----------------------------------------------------------
+    # Backward sampling
+    # ----------------------------------------------------------
+    SMCsamplers.BackwardSampling!(Draws,μ_filter,Σ_filter,μ_pred,Σ_pred,A,μ₀,Σ₀;sample_t0=sample_t0)
     if filter_output
         return μ_filter, Σ_filter
     end
@@ -127,202 +161,7 @@ function FFBS_IEKF_transformed!(
     return nothing
 end
 
-
-function BetaSuffStatsCondMoments(state, param, t)
-
-    s = BetaSuffStatsShapes(state, param, t)
-
-    α = s.α
-    β = s.β
-    κ = s.κ_eff
-
-    g = length(α)
-
-    h = zeros(2g)
-    R = zeros(2g, 2g)
-
-    for i in 1:g
-
-        j = g + i
-
-        ψ1α = trigamma(α[i])
-        ψ1β = trigamma(β[i])
-        ψ1κ = trigamma(κ[i])
-
-        # same ordering as BetaSuffStatsGrouped()
-        h[i] =
-            digamma(α[i]) - digamma(κ[i])
-
-        h[j] =
-            digamma(β[i]) - digamma(κ[i])
-
-        R[i, i] = ψ1α - ψ1κ
-        R[j, j] = ψ1β - ψ1κ
-
-        R[i, j] = -ψ1κ
-        R[j, i] = -ψ1κ
-    end
-
-    return h, R
-end
-
-function BetaSuffStatsJacobian(state, param, t)
-
-    s = BetaSuffStatsShapes(state, param, t)
-
-    Zμ = s.Zμ
-    Zκ = s.Zκ
-
-    ημ = s.ημ
-    ηκ = s.ηκ
-
-    μ = s.μ
-    κ = s.κ
-
-    α = s.α
-    β = s.β
-    κeff = s.κ_eff
-
-    α_raw = s.α_raw
-    β_raw = s.β_raw
-
-    idxμ = param.Zidx[1]
-    idxκ = param.Zidx[2]
-
-    n = length(state)
-    g = length(μ)
-
-    H = zeros(2g, n)
-
-    dμ = mueta.(Ref(param.link[1]), ημ)
-    dκ = mueta.(Ref(param.link[2]), ηκ)
-
-    for i in 1:g
-
-        j = g + i
-
-        # ------------------------------------------------------
-        # Derivatives before shape floors
-        # ------------------------------------------------------
-
-        dα_dημ =
-            κ[i] * dμ[i]
-
-        dα_dηκ =
-            μ[i] * dκ[i]
-
-        dβ_dημ =
-            -κ[i] * dμ[i]
-
-        dβ_dηκ =
-            (1.0 - μ[i]) * dκ[i]
-
-        # ------------------------------------------------------
-        # Shape floors:
-        #
-        # α = max(α_raw, shape_floor)
-        # β = max(β_raw, shape_floor)
-        #
-        # derivative is zero when floor is active
-        # ------------------------------------------------------
-
-        if α_raw[i] <= α[i] && α_raw[i] != α[i]
-            dα_dημ = 0.0
-            dα_dηκ = 0.0
-        end
-
-        if β_raw[i] <= β[i] && β_raw[i] != β[i]
-            dβ_dημ = 0.0
-            dβ_dηκ = 0.0
-        end
-
-        # κeff = α + β
-        dκeff_dημ =
-            dα_dημ + dβ_dημ
-
-        dκeff_dηκ =
-            dα_dηκ + dβ_dηκ
-
-        ψ1α = trigamma(α[i])
-        ψ1β = trigamma(β[i])
-        ψ1κ = trigamma(κeff[i])
-
-        # ------------------------------------------------------
-        # h1 = ψ(α) - ψ(κeff)
-        # ------------------------------------------------------
-
-        dh1_dημ =
-            ψ1α * dα_dημ -
-            ψ1κ * dκeff_dημ
-
-        dh1_dηκ =
-            ψ1α * dα_dηκ -
-            ψ1κ * dκeff_dηκ
-
-        # ------------------------------------------------------
-        # h2 = ψ(β) - ψ(κeff)
-        # ------------------------------------------------------
-
-        dh2_dημ =
-            ψ1β * dβ_dημ -
-            ψ1κ * dκeff_dημ
-
-        dh2_dηκ =
-            ψ1β * dβ_dηκ -
-            ψ1κ * dκeff_dηκ
-
-        # ------------------------------------------------------
-        # Chain rule through regression design
-        # ------------------------------------------------------
-
-        H[i, idxμ] .=
-            dh1_dημ .* Zμ[i, :]
-
-        H[i, idxκ] .=
-            dh1_dηκ .* Zκ[i, :]
-
-        H[j, idxμ] .=
-            dh2_dημ .* Zμ[i, :]
-
-        H[j, idxκ] .=
-            dh2_dηκ .* Zκ[i, :]
-    end
-
-    return H
-end
-
-
-function constrain_precision_variance(
-    Omega_updated::AbstractMatrix,
-    precision_idx::Int,
-    sd_gamma_max::Real
-)
-
-    Omega = Matrix(Omega_updated)
-
-    var_gamma_max = sd_gamma_max^2
-    Orr = Omega[precision_idx, precision_idx]
-
-    if !isfinite(Orr) || Orr <= 0
-        error("IEKF precision-state variance must be finite and positive.")
-    end
-
-    if Orr > var_gamma_max
-
-        # Required rescaling of the precision-state standard deviation
-        s = sqrt(var_gamma_max / Orr)
-
-        # Scale corresponding row and column
-        Omega[precision_idx, :] .*= s
-        Omega[:, precision_idx] .*= s
-
-        # Restore exact symmetry numerically
-        Omega = Matrix(Symmetric((Omega + Omega') / 2))
-    end
-
-    return Omega
-end
-
+### Bounded implementation
 function kalmanfilter_update_transformed_IEKF(
     mu::AbstractVector,
     Omega::AbstractMatrix,
@@ -336,7 +175,7 @@ function kalmanfilter_update_transformed_IEKF(
     Sigma_n::AbstractMatrix,
     t,
     maxIter::Integer;
-    tol::Real = 1e-3,
+    tol::Real = 1e-2,
     covariance_floor::Real = 1e-8,
     return_diagnostics::Bool = false,
 )
@@ -355,7 +194,6 @@ function kalmanfilter_update_transformed_IEKF(
     # ==========================================================
 
     mu_iter = copy(mu_prior)
-
     mean_distance = Inf
     iteration_used = 0
 
@@ -365,9 +203,10 @@ function kalmanfilter_update_transformed_IEKF(
     S_k = nothing
     K_k = nothing
 
-    precision_idx = 3
+    constrained   = true
+    precision_idx = length(mu_iter)
     delta_gamma   = 0.5 # Maximum precision-state change per iteration
-    sd_gamma_max  = 1.0      # maximum posterior SD of precision state
+    sd_gamma_max  = 0.5      # maximum posterior SD of precision state
     var_gamma_max = sd_gamma_max^2
 
     if maxIter == 1
@@ -378,8 +217,6 @@ function kalmanfilter_update_transformed_IEKF(
     end
 
     ###
-    constrained = true
-    
     for iteration in 1:maxIter
 
         iteration_used = iteration
@@ -446,7 +283,7 @@ function kalmanfilter_update_transformed_IEKF(
     Omega_updated = Matrix(Symmetric((Omega_updated + Omega_updated')/2))
 
    if constrained
-    Omega_updated = constrain_precision_variance(Omega_updated,precision_idx,sd_gamma_max)
+        Omega_updated = constrain_precision_variance(Omega_updated,precision_idx,sd_gamma_max)
    end
 
     # ==========================================================
@@ -481,7 +318,7 @@ function kalmanfilter_update_transformed_IEKF(
     )
 end
 
-
+### The one I use wihtour bounds
 function kalmanfilter_update_transformed_IEKF_ref(
     mu::AbstractVector,
     Omega::AbstractMatrix,
@@ -495,7 +332,7 @@ function kalmanfilter_update_transformed_IEKF_ref(
     Sigma_n::AbstractMatrix,
     t,
     maxIter::Integer;
-    tol::Real = 1e-3,
+    tol::Real = 1e-2,
     covariance_floor::Real = 1e-8,
     return_diagnostics::Bool = false,
 )
@@ -616,6 +453,9 @@ function kalmanfilter_update_transformed_IEKF_ref(
     )
 end
 
+###################
+### Beta moments
+###################
 
 function BetaSuffStatsShapes(state, param, t;
     mean_boundary=1e-12,
@@ -659,4 +499,353 @@ function BetaSuffStatsShapes(state, param, t;
         α_raw=α_raw,
         β_raw=β_raw
     )
+end
+
+
+
+function BetaSuffStatsCondMoments(state, param, t)
+
+    s = BetaSuffStatsShapes(state, param, t)
+
+    α = s.α
+    β = s.β
+    κ = s.κ_eff
+
+    g = length(α)
+
+    h = zeros(2g)
+    R = zeros(2g, 2g)
+
+    for i in 1:g
+
+        j = g + i
+
+        ψ1α = trigamma(α[i])
+        ψ1β = trigamma(β[i])
+        ψ1κ = trigamma(κ[i])
+
+        # same ordering as BetaSuffStatsGrouped()
+        h[i] =digamma(α[i]) - digamma(κ[i])
+        h[j] =digamma(β[i]) - digamma(κ[i])
+
+        R[i, i] = ψ1α - ψ1κ
+        R[j, j] = ψ1β - ψ1κ
+
+        R[i, j] = -ψ1κ
+        R[j, i] = -ψ1κ
+    end
+
+    return h, R
+end
+
+function BetaSuffStatsJacobian(state, param, t)
+
+    s = BetaSuffStatsShapes(state, param, t)
+
+    Zμ = s.Zμ
+    Zκ = s.Zκ
+
+    ημ = s.ημ
+    ηκ = s.ηκ
+
+    μ = s.μ
+    κ = s.κ
+
+    α = s.α
+    β = s.β
+    κeff = s.κ_eff
+
+    α_raw = s.α_raw
+    β_raw = s.β_raw
+
+    idxμ = param.Zidx[1]
+    idxκ = param.Zidx[2]
+
+    n = length(state)
+    g = length(μ)
+
+    H = zeros(2g, n)
+
+    dμ = mueta.(Ref(param.link[1]), ημ)
+    dκ = mueta.(Ref(param.link[2]), ηκ)
+
+    for i in 1:g
+
+        j = g + i
+
+        # ------------------------------------------------------
+        # Derivatives before shape floors
+        # ------------------------------------------------------
+
+        dα_dημ =κ[i] * dμ[i]
+        dα_dηκ =μ[i] * dκ[i]
+        dβ_dημ =-κ[i] * dμ[i]
+        dβ_dηκ =(1.0 - μ[i]) * dκ[i]
+
+        # ------------------------------------------------------
+        # Shape floors:
+        #
+        # α = max(α_raw, shape_floor)
+        # β = max(β_raw, shape_floor)
+        #
+        # derivative is zero when floor is active
+        # ------------------------------------------------------
+
+        #if α_raw[i] <= α[i] && α_raw[i] != α[i]
+            #dα_dημ = 0.0
+            #dα_dηκ = 0.0
+        #end
+
+        #if β_raw[i] <= β[i] && β_raw[i] != β[i]
+            #dβ_dημ = 0.0
+            #dβ_dηκ = 0.0
+        #end
+
+        # κeff = α + β
+        dκeff_dημ =dα_dημ + dβ_dημ
+        dκeff_dηκ =dα_dηκ + dβ_dηκ
+
+        ψ1α = trigamma(α[i])
+        ψ1β = trigamma(β[i])
+        ψ1κ = trigamma(κeff[i])
+
+        # ------------------------------------------------------
+        # h1 = ψ(α) - ψ(κeff)
+        # ------------------------------------------------------
+
+        dh1_dημ =ψ1α * dα_dημ -ψ1κ * dκeff_dημ
+        dh1_dηκ =ψ1α * dα_dηκ -ψ1κ * dκeff_dηκ
+
+        # ------------------------------------------------------
+        # h2 = ψ(β) - ψ(κeff)
+        # ------------------------------------------------------
+
+        dh2_dημ =ψ1β * dβ_dημ -ψ1κ * dκeff_dημ
+        dh2_dηκ =ψ1β * dβ_dηκ -ψ1κ * dκeff_dηκ
+
+        # ------------------------------------------------------
+        # Chain rule through regression design
+        # ------------------------------------------------------
+
+        H[i, idxμ] .=dh1_dημ .* Zμ[i, :]
+        H[i, idxκ] .=dh1_dηκ .* Zκ[i, :]
+        H[j, idxμ] .=dh2_dημ .* Zμ[i, :]
+        H[j, idxκ] .=dh2_dηκ .* Zκ[i, :]
+    end
+
+    return H
+end
+
+
+##############################
+# Beta single suff statistics
+##############################
+
+function BetaSingleSuffStatsCondMoments(
+    state,
+    param,
+    t,
+    stat::Symbol
+)
+
+    stat in (:logy, :log1my) ||
+        throw(ArgumentError("stat must be :logy or :log1my"))
+
+    s = BetaSuffStatsShapes(state, param, t)
+
+    α = s.α
+    β = s.β
+    κeff = s.κ_eff
+
+    g = length(α)
+
+    h = zeros(g)
+    R = zeros(g, g)
+
+    for i in 1:g
+
+        ψ1κ = trigamma(κeff[i])
+
+        if stat === :logy
+
+            h[i] =
+                digamma(α[i]) -
+                digamma(κeff[i])
+
+            R[i, i] =
+                trigamma(α[i]) -
+                ψ1κ
+
+        else  # :log1my
+
+            h[i] =
+                digamma(β[i]) -
+                digamma(κeff[i])
+
+            R[i, i] =
+                trigamma(β[i]) -
+                ψ1κ
+        end
+    end
+
+    return h, R
+end
+
+function BetaSingleSuffStatsJacobian(
+    state,
+    param,
+    t,
+    stat::Symbol
+)
+
+    stat in (:logy, :log1my) ||
+        throw(ArgumentError("stat must be :logy or :log1my"))
+
+    s = BetaSuffStatsShapes(state, param, t)
+
+    Zμ = s.Zμ
+    Zκ = s.Zκ
+
+    ημ = s.ημ
+    ηκ = s.ηκ
+
+    μ = s.μ
+    κ = s.κ
+
+    α = s.α
+    β = s.β
+    κeff = s.κ_eff
+
+    idxμ = param.Zidx[1]
+    idxκ = param.Zidx[2]
+
+    n = length(state)
+    g = length(μ)
+
+    H = zeros(g, n)
+
+    # Derivatives of underlying links
+    dμ = mueta.(Ref(param.link[1]), ημ)
+    dκ = mueta.(Ref(param.link[2]), ηκ)
+
+    for i in 1:g
+
+        # ------------------------------------------------------
+        # Underlying Beta model:
+        #
+        # α = μκ
+        # β = (1-μ)κ
+        #
+        # Numerical floors are NOT differentiated.
+        # ------------------------------------------------------
+
+        dα_dημ =  κ[i] * dμ[i]
+        dα_dηκ =  μ[i] * dκ[i]
+
+        dβ_dημ = -κ[i] * dμ[i]
+        dβ_dηκ = (1.0 - μ[i]) * dκ[i]
+
+        # κeff = α + β
+        dκeff_dημ =
+            dα_dημ + dβ_dημ
+
+        dκeff_dηκ =
+            dα_dηκ + dβ_dηκ
+
+        ψ1κ = trigamma(κeff[i])
+
+        if stat === :logy
+
+            # h = ψ(α) - ψ(κeff)
+
+            ψ1α = trigamma(α[i])
+
+            dh_dημ =
+                ψ1α * dα_dημ -
+                ψ1κ * dκeff_dημ
+
+            dh_dηκ =
+                ψ1α * dα_dηκ -
+                ψ1κ * dκeff_dηκ
+
+        else  # :log1my
+
+            # h = ψ(β) - ψ(κeff)
+
+            ψ1β = trigamma(β[i])
+
+            dh_dημ =
+                ψ1β * dβ_dημ -
+                ψ1κ * dκeff_dημ
+
+            dh_dηκ =
+                ψ1β * dβ_dηκ -
+                ψ1κ * dκeff_dηκ
+        end
+
+        # Chain rule to state vector
+        H[i, idxμ] .=
+            dh_dημ .* Zμ[i, :]
+
+        H[i, idxκ] .=
+            dh_dηκ .* Zκ[i, :]
+    end
+
+    return H
+end
+
+BetaLogYCondMoments(state, param, t) =
+    BetaSingleSuffStatsCondMoments(
+        state, param, t, :logy
+    )
+
+BetaLogYJacobian(state, param, t) =
+    BetaSingleSuffStatsJacobian(
+        state, param, t, :logy
+    )
+
+
+BetaLog1mYCondMoments(state, param, t) =
+    BetaSingleSuffStatsCondMoments(
+        state, param, t, :log1my
+    )
+
+BetaLog1mYJacobian(state, param, t) =
+    BetaSingleSuffStatsJacobian(
+        state, param, t, :log1my
+    )
+
+##############################
+# Constrain precsion variance
+##############################
+### If we decide to constrain the spread in the variance
+function constrain_precision_variance(
+    Omega_updated::AbstractMatrix,
+    precision_idx::Int,
+    sd_gamma_max::Real
+)
+
+    Omega = Matrix(Omega_updated)
+
+    var_gamma_max = sd_gamma_max^2
+    Orr = Omega[precision_idx, precision_idx]
+
+    if !isfinite(Orr) || Orr <= 0
+        error("IEKF precision-state variance must be finite and positive.")
+    end
+
+    if Orr > var_gamma_max
+
+        # Required rescaling of the precision-state standard deviation
+        s = sqrt(var_gamma_max / Orr)
+
+        # Scale corresponding row and column
+        Omega[precision_idx, :] .*= s
+        Omega[:, precision_idx] .*= s
+
+        # Restore exact symmetry numerically
+        Omega = Matrix(Symmetric((Omega + Omega') / 2))
+    end
+
+    return Omega
 end

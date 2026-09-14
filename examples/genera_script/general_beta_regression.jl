@@ -71,7 +71,15 @@ end
 #γ = [t < T / 2 ? 1 : 3 for t in 1:T]
 γ = [t < T / 2 ? 1 : 9 for t in 1:T]
 
+# Example time-varying paths
+#γ = zeros(T, q)
+#for t in 1:T
+    #γ[t, 1] = 0.8 * sin(2.5π * t / 150)
+#end
+
+
 ψtime = exp.(γ)
+
 BetaMean(μ, ψ) = Beta(1.0e-15 + μ * ψ, 1.0e-15 + (1 - μ) * ψ)
 invlink_logit = (LogitLink(),)
 
@@ -205,8 +213,8 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
-    nIter=3000,              # Number of iterations in the Gibbs sampler
-    nBurn=3000,               # Number of burn-in iterations
+    nIter=2000,              # Number of iterations in the Gibbs sampler
+    nBurn=2000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility
@@ -240,21 +248,25 @@ mkpath(save_dir)
 # ============================================================
 
 methodlabel = "Laplace-None"
-
-algoSettings_laplace = (;algoSettings...,scaling = scaling,stateSamplingMethod = :ffbs_laplace)
+algoSettings_laplace = (;algoSettings...,scaling = scaling,nMaxIter=10, stateSamplingMethod = :ffbs_laplace)
 dataSettings_laplace = (y = y,X = X,covSel = covSel,nPerGroup = nPerGroup)
+
 θpost_laplace, groupSizes_laplace, nFailure_laplace =GibbsTVGLM(dataSettings_laplace,priorSettings,modelSettings,algoSettings_laplace)
 
 prcFailure_laplace =100 * nFailure_laplace[] /(algoSettings_laplace.nBurn + algoSettings_laplace.nIter)
 println("$(algoSettings_laplace.stateSamplingMethod) failed at ","$(prcFailure_laplace)% of the simulated trajectories")
 quant_paramtime_laplace =quantile_multidim(θpost_laplace,[0.025, 0.5, 0.975],dims = 3)
 
+quant_paramtime_laplace = quantile_multidim(θpost_laplace,[0.025, 0.5, 0.975],dims = 3)
+plt_overlay          = plot_param_path_betareg(β,γ)
+PlotPostParamEvolution!(plt_overlay,quant_paramtime_laplace,"Laplace",groupSizes_laplace;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[4])
+display(plt_overlay)
+
 # ============================================================
 # 2. IPLF
 # ============================================================
 
 methodlabel = "IPLF"
-
 obsChoice = :both
 
 obsTransform =
@@ -275,7 +287,7 @@ slrObs =prepare_observation_transform(obsTransform,Y,condMean,condCov,nPerGroup)
 algoSettings_iplf = (;algoSettings..., nMaxIter=10, scaling = scaling,stateSamplingMethod = :ffbs_slr)
 dataSettings_iplf = (y = y,X = X,covSel = covSel,nPerGroup = nPerGroup)
 modelSettings_iplf = (;modelSettings...,slrObs = slrObs)
-priorSettings_iplf = (;priorSettings..., n₀ = 1)
+priorSettings_iplf = (;priorSettings..., n₀ = 5)
 
 θpost_iplf, groupSizes_iplf, nFailure_iplf =GibbsTVGLM(dataSettings_iplf, priorSettings_iplf,modelSettings_iplf,algoSettings_iplf)
 prcFailure_iplf =100 * nFailure_iplf[] /(algoSettings_iplf.nBurn + algoSettings_iplf.nIter)
@@ -286,6 +298,8 @@ plt_overlay = plot_param_path_betareg(β,γ)
 PlotPostParamEvolution!(plt_overlay,quant_paramtime_iplf,"IPLF",groupSizes_iplf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[4])
 display(plt_overlay)
 
+
+plot(y)
 ## The initial values 
 #plot(y)
 # ============================================================
@@ -315,8 +329,6 @@ slrObs = prepare_observation_transform(obsTransform,Y,condMean,condCov,nPerGroup
 # IEKF algorithm
 algoSettings_iekf = (;algoSettings...,scaling = scaling, nMaxIter=10, stateSamplingMethod = :ffbs_iekf)
 dataSettings_iekf = (y = y,X = X,covSel = covSel,nPerGroup = nPerGroup)
-
-# Add IEKF-specific functions ONLY to this modelSettings object
 modelSettings_iekf = (;modelSettings...,slrObs = slrObs,sufficient_condMoments_IEKF = BetaSuffStatsCondMoments,sufficient_condJacobian = BetaSuffStatsJacobian)
 
 #Random.seed!(1)
@@ -328,67 +340,10 @@ quant_paramtime_iekf = quantile_multidim( θpost_iekf,[0.025, 0.5, 0.975],dims=3
 plt_overlay = plot_param_path_betareg(β,γ)
 PlotPostParamEvolution!(plt_overlay,quant_paramtime_iekf,"IEKF",groupSizes_iekf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[2])
 #PlotPostParamEvolution!(plt_overlay,quant_paramtime_iplf,"IPLF",groupSizes_iplf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[4])
-#PlotPostParamEvolution!(plt_overlay,quant_paramtime_laplace,"Laplace",groupSizes_laplace;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[1])
+PlotPostParamEvolution!(plt_overlay,quant_paramtime_laplace,"Laplace",groupSizes_laplace;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[1])
 display(plt_overlay)
 
-# ============================================================
-# 3. OVERLAY PLOT
-#
-# Start from truth, then add Laplace and IPLF to same plot
-# ============================================================
-
-plt_overlay = plot_param_path_betareg(
-    β,
-    γ
-)
-
-# ------------------------------------------------------------
-# Laplace
-# ------------------------------------------------------------
-
-PlotPostParamEvolution!(
-    plt_overlay,
-    quant_paramtime_laplace,
-    "Laplace",
-    groupSizes_laplace;
-    dateVec = dateVec,
-    interpMethod = interpMethod,
-    plot_t0 = keep_t0,
-    interval_style = :solid,
-    lw = 2,
-    c = colors[3]
-)
-
-
-# ------------------------------------------------------------
-# IPLF
-# ------------------------------------------------------------
-
-PlotPostParamEvolution!(
-    plt_overlay,
-    quant_paramtime_iplf,
-    "IPLF",
-    groupSizes_iplf;
-    dateVec = dateVec,
-    interpMethod = interpMethod,
-    plot_t0 = keep_t0,
-    interval_style = :solid,
-    lw = 2,
-    c = colors[4]
-)
-
-
-display(plt_overlay)
-
-
-# ============================================================
-# 4. Save overlay
-# ============================================================
-
-savefig(
-    plt_overlay,
-    joinpath(save_dir, "laplace_iplf_overlay_beta.pdf")
-)
+#savefig(plt_overlay,joinpath(save_dir, "laplace_iplf_overlay_beta.pdf"))
 
 
 
@@ -398,62 +353,3 @@ savefig(
 
 
 
-
-
-
-################################################################
-
-## IPLF 
-methodlabel = "IPLF"
-
-# Beta
-#obsTransform = BetaSuffStatsAveraged()
-obsTransform = BetaSuffStatsGrouped()
-#obsTransform = IdentityTransform()
-
-Y, _, _, groupSizes = splitEqualGroups(y, X, covSel, nPerGroup)
-
-slrObs = prepare_observation_transform(obsTransform,Y,condMean,condCov,nPerGroup)
-algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_slr);
-dataSettings = (y=y , X=X, covSel=covSel, nPerGroup=nPerGroup);
-modelSettings = (;modelSettings...,slrObs = slrObs)
-
-Random.seed!(678)
-θpost, groupSizes, nFailure = GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings);
-prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
-println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% of the simulated trajectories")
-
-#size(θpost)
-quant_paramtime_iplf = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
-plt_iplf = plot_param_path_betareg(β, γ)
-
-# Add only the new IPLF posterior
-PlotPostParamEvolution!(
-    plt_iplf,
-    quant_paramtime_iplf,
-    "IPLF",
-    groupSizes;
-    dateVec=dateVec,
-    interpMethod=interpMethod,
-    plot_t0=keep_t0,
-    interval_style=:solid,
-    lw=2,
-    c=colors[4]
-)
-
-display(plt_iplf)
-
-
-## Laplace approximation - none
-methodlabel = "Laplace-None"
-algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_laplace);
-dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
-
-θpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,priorSettings, modelSettings, algoSettings);
-
-prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
-println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% of the simulated trajectories")
-
-# Parameter quantiles on the parameter time scale - this always includes t=0
-quant_paramtime_lanone = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
-PlotPostParamEvolution!(plt, quant_paramtime_lanone, methodlabel,groupSizes; dateVec=dateVec, interpMethod=interpMethod, plot_t0=keep_t0, interval_style=:solid, lw=2, c=colors[3])

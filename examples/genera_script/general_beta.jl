@@ -48,9 +48,9 @@ nState = p + q            # = 2
 # Link functions
 # ----------------------------------------------------------
 
-#link = (LogitLink(), LogLinLink()) # best so far
+link = (LogitLink(), LogLink())
 #link = (LogitLink(), ()) # best so far
-invlink2 = (x -> logistic(x), x -> exp(x))
+#invlink2 = (x -> logistic(x), x -> exp(x))
 
 # ==========================================================
 # TRUE UNRESTRICTED STATE PATHS
@@ -97,20 +97,22 @@ end
 ψtime = similar(γ[:, 1])
 
 for t in 1:T
-    μtime[t] = invlink2[1](β[t, 1])
-    ψtime[t] = invlink2[2](γ[t, 1])
+    μtime[t]  = linkinv(link[1], β[t, 1])
+    ψtime[t] = linkinv(link[2], γ[t, 1])
 end
 
 # Beta shape parameters
 αtime = μtime .* ψtime
 βtime = (1 .- μtime) .* ψtime
 
+plot(αtime )
+plot!(βtime )
 # ==========================================================
 # SIMULATE OBSERVATIONS
 # ==========================================================
 
+Random.seed!(564)
 y = Vector{Float64}(undef, T)
-
 for t in 1:T
     y[t] = rand(Beta(αtime[t], βtime[t]))
 end
@@ -152,10 +154,10 @@ v = max(var(y[1:20]), eps(Float64))
 
 priorparam = [m, κ_init]
 
-f_μ(x) = priorparam[1] - invlink2[1](x)
+f_μ(x) = priorparam[1] - linkinv(link[1], x)
 β_m0 = [find_zero(f_μ, 0.0); zeros(p - 1)]
 
-f_ϕ(x) = priorparam[2] - invlink2[2](x)
+f_ϕ(x) =  priorparam[2] - linkinv(link[2], x)
 β_ϕ0 = [find_zero(f_ϕ, log(κ_init)); zeros(q - 1)]
 
 μ₀ = [β_m0; β_ϕ0]
@@ -200,13 +202,11 @@ priorSettings = (
     μ₀=μ₀, Σ₀=Σ₀,n₀ = 1, # Prior for βₜ at time t=0
 );
 
+#link = (LogitLink(), LogLinLink())
 modelSettings = (
     observation=observation,
     link=link,
-    #link=(LogLinLink(),),
-
-    # New for ILF
-    
+ 
     condMean = condMean, 
     condCov=condCov,
 
@@ -222,13 +222,13 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
-    nIter=5000,              # Number of iterations in the Gibbs sampler
-    nBurn=1000,               # Number of burn-in iterations
+    nIter=3000,              # Number of iterations in the Gibbs sampler
+    nBurn=2000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility
     h_upper=Inf,              # Upper bound for log-volatility
-    polyaoffset=0.01,          # Offset for Polya-Gamma variables in the update of h_t
+    polyaoffset=0.00,          # Offset for Polya-Gamma variables in the update of h_t
     scaling=:none,            # Scaling of state innov, can be :full, :diagonal or :none
     FisherInfo=FisherInfoBeta,# Fisher info
     nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
@@ -240,51 +240,31 @@ dateVec = 1:T
 keep_t0 = false # Whether to keep the state at time t=0 in the output of the Gibbs sampler
 results = []
 interpMethod = :linear
-scaling = :full
+scaling = :none
 nPerGroup = 5
 
 ## IPLF 
 methodlabel = "IPLF"
 
 # Beta
-#obsTransform = BetaSuffStatsAveraged()
-
 obsChoice = :both
-
 obsTransform =
     if obsChoice === :y
-
         IdentityTransform()
-
     elseif obsChoice === :logy
-
         BetaSingleSuffStatGrouped(:logy)
-
     elseif obsChoice === :log1my
-
         BetaSingleSuffStatGrouped(:log1my)
-
     elseif obsChoice === :both
-
         BetaSuffStatsGrouped()
-
     else
-
         error("Unknown obsChoice = $obsChoice")
 end
-
 
 #obsTransform = IdentityTransform()
 Y, _, _, groupSizes = splitEqualGroups(y, X, covSel, nPerGroup)
 
-slrObs = prepare_observation_transform(
-    obsTransform,
-    Y,
-    condMean,
-    condCov,
-    nPerGroup
-)
-
+slrObs = prepare_observation_transform(obsTransform,Y,condMean,condCov,nPerGroup)
 algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_slr);
 dataSettings = (y= y, X=X, covSel=covSel, nPerGroup=nPerGroup);
 modelSettings = (;modelSettings...,slrObs = slrObs)
@@ -297,20 +277,87 @@ println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% of the sim
 #size(θpost)
 quant_paramtime_iplf = quantile_multidim(θpost, [0.025, 0.5, 0.975], dims=3);
 plt_iplf = plot_param_path_betareg(β, γ)
-
-# Add only the new IPLF posterior
-PlotPostParamEvolution!(
-    plt_iplf,
-    quant_paramtime_iplf,
-    "IPLF",
-    groupSizes;
-    dateVec=dateVec,
-    interpMethod=interpMethod,
-    plot_t0=keep_t0,
-    interval_style=:solid,
-    lw=2,
-    c=colors[4]
-)
+PlotPostParamEvolution!(plt_iplf,quant_paramtime_iplf,"IPLF",groupSizes;dateVec=dateVec,interpMethod=interpMethod,
+                        plot_t0=keep_t0,interval_style=:solid,lw=2,c=colors[4])
 display(plt_iplf)
 
+### in some cases letting delta gamma be 0.3 helps
+### for iplf shoulders 0.01 help prevent some excursions into unstable regions
+
 #### Run from 5 seeds and plot 
+
+####################
+# IEKF
+####################
+
+
+algoSettings = (
+    stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
+    nParticles=100,           # Number of particles if using PGAS
+    nIter=3000,              # Number of iterations in the Gibbs sampler
+    nBurn=3000,               # Number of burn-in iterations
+    nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
+    nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
+    offsetMethod=eps(),       # Offset for log-volatility
+    h_upper=Inf,              # Upper bound for log-volatility
+    polyaoffset=0.0,          # Offset for Polya-Gamma variables in the update of h_t
+    scaling=:none,            # Scaling of state innov, can be :full, :diagonal or :none
+    FisherInfo=FisherInfoBeta,# Fisher info
+    nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
+    fixed_scaling = true,     # Should the scaling matrix be fixed across Gibbs iter?
+    verbose=true,             # Whether to print verbose output during sampling.
+);
+
+scaling = :none
+nPerGroup = 5
+
+methodlabel = "IEKF"
+obsChoice = :both
+
+obsTransform =
+    if obsChoice === :y
+        IdentityTransform()
+    elseif obsChoice === :logy
+        BetaSingleSuffStatGrouped(:logy)
+    elseif obsChoice === :log1my
+        BetaSingleSuffStatGrouped(:log1my)
+    elseif obsChoice === :both
+        BetaSuffStatsGrouped()
+    else
+        error("Unknown obsChoice = $obsChoice")
+end
+
+if obsChoice === :logy
+    ieMoments  = BetaLogYCondMoments
+    ieJacobian = BetaLogYJacobian
+elseif obsChoice === :log1my
+    ieMoments  = BetaLog1mYCondMoments
+    ieJacobian = BetaLog1mYJacobian
+elseif obsChoice === :both
+    ieMoments  = BetaSuffStatsCondMoments
+    ieJacobian = BetaSuffStatsJacobian
+end
+
+# Same transformed/grouped observation setup as IPLF
+Y, _, _, groupSizes_iekf =splitEqualGroups(y, X, covSel, nPerGroup)
+slrObs = prepare_observation_transform(obsTransform,Y,condMean,condCov,nPerGroup)
+
+# IEKF algorithm
+algoSettings_iekf = (;algoSettings...,scaling = scaling, nMaxIter=10, stateSamplingMethod = :ffbs_iekf)
+dataSettings_iekf = (y = y,X = X,covSel = covSel,nPerGroup = nPerGroup)
+
+# Add IEKF-specific functions ONLY to this modelSettings object
+modelSettings_iekf = (;modelSettings...,slrObs = slrObs,
+                      sufficient_condMoments_IEKF = ieMoments,
+                      sufficient_condJacobian = ieJacobian)
+
+Random.seed!(1)
+θpost_iekf, groupSizes_iekf, nFailure_iekf =GibbsTVGLM(dataSettings_iekf,priorSettings,modelSettings_iekf,algoSettings_iekf)
+prcFailure_iekf =100 * nFailure_iekf[] /(algoSettings_iekf.nBurn + algoSettings_iekf.nIter)
+println("$(algoSettings_iekf.stateSamplingMethod) failed at ","$(prcFailure_iekf)% of the simulated trajectories")
+
+quant_paramtime_iekf = quantile_multidim(θpost_iekf,[0.025, 0.5, 0.975],dims=3)
+plt_overlay = plot_param_path_betareg(β, γ)
+PlotPostParamEvolution!(plt_overlay,quant_paramtime_iekf,"IEKF (new constraints)",groupSizes_iekf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[2])
+display(plt_overlay)#
+#savefig(plt_overlay,joinpath(save_dir, "laplace_iplf_iekf_new_constraints.pdf"))

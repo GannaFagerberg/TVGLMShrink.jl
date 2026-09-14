@@ -10,7 +10,8 @@ end
 struct LogLinLink{T<:Real} <: Link
     threshold::T
 end
-LogLinLink() = LogLinLink(8.0)
+
+LogLinLink() = LogLinLink(5.0)
 
 # linkfun: φ -> η 
 function linkfun(link::LogLinLink, φ::Real)

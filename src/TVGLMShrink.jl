@@ -44,8 +44,15 @@ export prepare_observation_transform
 export GammaSuffStatsAveraged,  GammaSuffStatsGrouped
 export fisher_gamma_blocks, FisherInfoGamma
 export fisher_nb_blocks, FisherInfoNB, NBFactorialStatsAveraged, NBFactorialStatsGrouped
-export FFBS_IEKF_transformed!, kalmanfilter_update_transformed_IEKF, BetaSuffStatsCondMoments, BetaSuffStatsJacobian
+export FFBS_IEKF_transformed!, FFBS_IEKF_transformed_scaled!,
+       kalmanfilter_update_transformed_IEKF, 
+       BetaSuffStatsCondMoments, BetaSuffStatsJacobian
 export FFBS_laplace_constrained!
+
+export BetaLogYCondMoments,
+       BetaLogYJacobian,
+       BetaLog1mYCondMoments,
+       BetaLog1mYJacobian
 
 include("TVGLMPlots.jl")
 export PlotPostParamEvolution, PlotPostParamEvolution!, postPredCheckDistr
@@ -56,6 +63,7 @@ export XDiagX, XDiagZ, densityScores,update_homoscedastic_uni!
 
 include("TVGLMModels.jl")
 export TVGLMmodel, LogLinLink, PositiveHardLink
-export AbstractObsTransform,IdentityTransform, make_identity_cond_moments, prepare_observation_transform
+export AbstractObsTransform,IdentityTransform, 
+       make_identity_cond_moments, prepare_observation_transform
 
 end

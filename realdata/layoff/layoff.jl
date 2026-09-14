@@ -1,5 +1,5 @@
 # US layoff proportions
-
+using Revise
 using Pkg
 Pkg.activate(joinpath(@__DIR__, "../.."))
 cd(joinpath(@__DIR__, "../.."))

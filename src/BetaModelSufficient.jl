@@ -116,7 +116,7 @@ end
 function beta_sufficient_observation_grouped(
     y;
     clip::Bool=false,
-    boundary::Real=1e-15
+    boundary::Real=1e-12
 )
 
     y_group = _beta_vector(y, "y")
@@ -160,7 +160,7 @@ function make_beta_sufficient_statistics_adapters_grouped(
     variance_denominator_offset::Real = 1.0,
     mean_boundary::Real = 1e-15,
     min_concentration::Real = 1e-15,
-    shape_floor::Real = 1e-5
+    shape_floor::Real = 1e-15
 )
 
     function beta_shapes_from_original_model(
@@ -317,7 +317,7 @@ end
 function beta_sufficient_observation_summed(
     y;
     clip::Bool = false,
-    boundary::Real = 1e-15
+    boundary::Real = 1e-12
 )
 
     y_group = _beta_vector(y, "y")
@@ -367,7 +367,7 @@ end
 function beta_sufficient_observation_averaged(
     y;
     clip::Bool = false,
-    boundary::Real = 1e-15
+    boundary::Real = 1e-12
 )
 
     y_group = _beta_vector(y, "y")
@@ -418,8 +418,8 @@ function make_beta_sufficient_statistics_adapters_averaged(
     raw_condMean,
     raw_condCov;
     variance_denominator_offset::Real = 1.0,
-    mean_boundary::Real = 1e-15,
-    min_concentration::Real = 1e-15
+    mean_boundary::Real = 1e-12,
+    min_concentration::Real = 1e-12
 )
 
     # ==========================================================
@@ -626,8 +626,8 @@ function make_beta_sufficient_statistics_adapters_summed(
     raw_condMean,
     raw_condCov;
     variance_denominator_offset::Real = 1.0,
-    mean_boundary::Real = 1e-15,
-    min_concentration::Real = 1e-15
+    mean_boundary::Real = 1e-12,
+    min_concentration::Real = 1e-12
 )
 
     # ==========================================================
@@ -870,8 +870,8 @@ end
 
 function BetaSuffStatsAveraged(;
     variance_denominator_offset::Real = 1.0,
-    mean_boundary::Real = 1e-15,
-    min_concentration::Real = 1e-15
+    mean_boundary::Real = 1e-12,
+    min_concentration::Real = 1e-12
 )
 
     return BetaSuffStats(

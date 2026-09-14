@@ -72,7 +72,7 @@ priorparam = mean(y[1:20]) # prior guess for mean near t = 0
 f(x) = priorparam - linkinv(link[1], x)
 m = find_zero(f, 0.0)
 μ₀ = [m; zeros(p - 1)]
-κ₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
+n₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
 Σ₀ = :fisherinfo # Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
 
 
@@ -83,7 +83,8 @@ priorSettings = (
     ϕ₀=0.5, κ₀=0.3,             # Prior for ϕ ~ N(ϕ₀, κ₀²)
     m₀=-15.0, σ₀=3.0,           # Prior for μ ~ N(m₀, σ₀²)
     ν₀=3.0, ψ₀=1,               # Prior for σ²ₙ ~ scaled inverse χ²(ν₀, ψ₀)
-    μ₀=μ₀, Σ₀=Σ₀, # Prior for βₜ at time t=0
+    μ₀=μ₀, Σ₀=Σ₀,n₀
+     # Prior for βₜ at time t=0
 );
 
 modelSettings = (
@@ -91,6 +92,9 @@ modelSettings = (
     link=link,
     condMean=condMean,
     condCov=condCov,
+
+    slrObs = nothing,
+
     innovModel=:dsp,   # choices: :dsp, :homogaussuniv
     α=1 / 2,
     β=1 / 2,
@@ -101,7 +105,7 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
-    nIter=10000,              # Number of iterations in the Gibbs sampler
+    nIter=3000,              # Number of iterations in the Gibbs sampler
     nBurn=3000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
@@ -111,6 +115,7 @@ algoSettings = (
     scaling=:full,            # Scaling of state innov, can be :full, :diagonal or :none
     FisherInfo=FisherInfoPois,# Fisher info
     nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
+    fixed_scaling = true,
     verbose=true,             # Whether to print verbose output during sampling.
 );
 

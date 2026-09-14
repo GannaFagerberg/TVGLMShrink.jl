@@ -35,7 +35,6 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
         );
     end
 
-    
     # Setting up data as grouped data
     Tobs = length(y)
     Y, Z, Xsel, groupSizes = splitEqualGroups(y, X, covSel, nPerGroup)
@@ -53,9 +52,13 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     # Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
     param = TVGLMmodel(LogVol2Covs(zeros(length(groupSizes), nState)), Z, Xsel, link, Zidx)
 
+    ### Links fisher
+    link_fisher = (link[1], GLM.LogLink())
+    param_fisher = TVGLMmodel(LogVol2Covs(zeros(length(groupSizes), nState)),Z,Xsel,link_fisher,Zidx)
+
     # Set up prior cov for t=0 state, with option to use Fisher info based prior
     if Σ₀ == :fisherinfo
-        Σ₀ = Hermitian((size(X, 1) / n₀) * inv(FisherInfo(param, μ₀, 1)))
+        Σ₀ = Hermitian((size(X, 1) / n₀) * inv(FisherInfo(param_fisher, μ₀, 1)))
         if verbose
             println("Prior at t=0 based on Fisher info with n₀ = $n₀")
             priorStd = sqrt.(diag(Σ₀))
@@ -80,21 +83,20 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
             nBurn=round(Int, 0.1 * nCalibScale), verbose=false)
 
         θpost0, _, _ = GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettingsCalibrate, progessbar=(status=progessbar.status, message="Calibrating scaling matrix: "))
+        
         for t in 1:T
             θmedian_t = median(θpost0[t, :, :]; dims=2)
             if scaling == :full
                 Svec[:, :, t] = sqrt(inv(Symmetric(groupSizes[t] * 
-                    FisherInfo(param, θmedian_t, t) / Tobs)))
+                    FisherInfo(param_fisher, θmedian_t, t) / Tobs)))
             elseif scaling == :diag
                 Svec[:, :, t] = Diagonal(sqrt(inv(Symmetric(groupSizes[t] * 
-                    FisherInfo(param, θmedian_t, t) / Tobs)))) 
+                    FisherInfo(param_fisher, θmedian_t, t) / Tobs)))) 
             elseif scaling == :fulllocal 
-                Svec[:, :, t] = sqrt(pinv(Symmetric(FisherInfo(param, θmedian_t, t))))
+                Svec[:, :, t] = sqrt(pinv(Symmetric(FisherInfo(param_fisher, θmedian_t, t))))
             elseif scaling == :diaglocal
-                Svec[:, :, t] = Diagonal(sqrt(pinv(Symmetric(FisherInfo(param, 
-                    θmedian_t, t)))))
+                Svec[:, :, t] = Diagonal(sqrt(pinv(Symmetric(FisherInfo(param_fisher, θmedian_t, t)))))
             else
-
             end
         end
 
@@ -234,8 +236,8 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
             end
         elseif stateSamplingMethod == :ffbs_slr
             if scaling === :none
-                #FFBS_SLR_transformed!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
-                FFBS_SLR_transformed!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=0.001, β=2, κ=0, sample_t0=true, nFailure=nFailure)
+                FFBS_SLR_transformed!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
+                #FFBS_SLR_transformed!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=0.1, β=2, κ=0, sample_t0=true, nFailure=nFailure)
             else
                 FFBS_SLR_transformed_scaling!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀, nMaxIter, ScaleMat, Svec, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
             end
@@ -255,7 +257,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
         if scaling === :none
             FFBS_IEKF_transformed!(θ,U,Y_sufficient,A,B,sufficient_condMoments_IEKF,sufficient_condJacobian,param,param.Σᵥ,μ₀,Σ₀,nMaxIter;sample_t0=true,nFailure=nFailure)
         else
-            error("Scaling is not yet implemented for stateSamplingMethod = :ffbs_iekf")
+            FFBS_IEKF_transformed_scaled!(θ,U,Y_sufficient,A,B,sufficient_condMoments_IEKF,sufficient_condJacobian,param,param.Σᵥ,μ₀,Σ₀,nMaxIter, ScaleMat, Svec;sample_t0=true,nFailure=nFailure)
         end
 
         elseif stateSamplingMethod == :montecarlo
