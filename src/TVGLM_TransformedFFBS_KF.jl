@@ -369,12 +369,16 @@ function kalmanfilter_update_transformed_IPLF(
     constrained::Bool = true,
     cov_bound::Bool = true,
 
-    # Precision-state safeguards
+    # Precision-state safeguards - bounded
     delta_gamma::Real = 0.5,
     sd_gamma_max::Real = 0.5,
 
+    # Precision-state safeguards: OFF
+    #delta_gamma::Real = Inf,
+    #sd_gamma_max::Real = Inf,
+
     # Mean-predictor safeguards
-    bound_mean_predictor::Bool = true,
+    bound_mean_predictor::Bool = false,
     delta_eta_mu::Real = 0.5,
     sd_eta_mu_max::Real = 0.5
 )
