@@ -19,6 +19,7 @@ using Utils: quantile_multidim
 using Utils: mvcolors as colors
 using GLM
 using Roots: find_zero
+
 include("PoisModel.jl")  # PoisReg model and Fisher info
 include("PoisModelUtils.jl")  # Load simulator, plotting for PoisReg
 
@@ -33,30 +34,20 @@ gr(legend=:topleft, grid=false, color=colors[2], lw=2, legendfontsize=12,
 Random.seed!(slurm_id); # set seed for reproducibility, different seed for each slurm_id
 applName = "PoisRegPathSync" # name for saving results and figures
 
+
 # Simulate data from the Poisson regression model with fixed parameter paths
 T = 500;
 nCov = 1;       # Total number of covariates, excluding the intercept
 covSel = [[1, 2, 3]] # covariates for mean and precision, first covariate is intercept
 p = length(covSel[1])
-β₀ = [2, 0, 0.0]
-link = (LogLink(),)
-Σₑ = [1 2; 2 10];     # Noise cov for the VAR(1) processes that generate the covariates
-mₑ = [0.0, 0.0];      # Mean for the VAR(1) processes that generate the covariates
-Φ = [diagm([0.5, 0.5])] # AR(1) coefficients for the covariate processes
-y, X, β, λtime = simulate_poisson_reg_data(T, p, covSel, link, Φ, Σₑ, mₑ)
-
-println("Proportion of zeros: ", mean(y .== 0))
-
+link = (LogLinLink(),)
+σₑ = [1 5; 5 100];        # Noise std for the AR(1) processes that generate the covariates
+mₑ = [0.0, 0.0];     # Mean for the AR(1) processes that generate the covariates
+φ = 0.5
+β₀ = [0.0,0.0,0.05]
+y, X, β, λtime = simulate_poisson_reg_data_fixed(T, p, covSel, link, φ, σₑ, mₑ, β₀);
 
 ## Plot the true parameter paths and the time series
-
-# Plot covariate paths
-pltx = []
-for j in 2:p
-    push!(pltx, plot(X[:, j], title=L"X_%$(j-1)" * " path", lw=2, color=colors[3]))
-end
-plot(pltx..., layout=(p - 1, 1), size=(1200, 800), xguidefontsize=12, yguidefontsize=14,
-    titlefontsize=18, margin=5mm)
 
 # plot the parameter evolution path of the regression coefficients
 plt = plot_param_path_poisreg(β)
@@ -68,16 +59,17 @@ plot_poisparam_evolution(λtime)
 plot_poisdensity_evolution(λtime, y)
 
 ## The prior for the state at time t=0 using priors on intercepts and Fisher info
-priorparam = mean(y[1:20]) # prior guess for mean near t = 0
+priorparam = mean(y[1:20]) # Prior for λ ∼ lognormal(m, σ²)
+κ₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
 f(x) = priorparam - linkinv(link[1], x)
 m = find_zero(f, 0.0)
 μ₀ = [m; zeros(p - 1)]
 n₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
-Σ₀ = :fisherinfo # Σ₀ = (1 / κ₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
+Σ₀ = :fisherinfo # Σ₀ = (1 / n₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
+
 
 
 ## Set up the prior, model and algorithm settings
-
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=1)
 priorSettings = (
     ϕ₀=0.5, κ₀=0.3,             # Prior for ϕ ~ N(ϕ₀, κ₀²)
@@ -114,6 +106,7 @@ algoSettings = (
     polyaoffset=0.0,          # Offset for Polya-Gamma variables in the update of h_t
     scaling=:full,            # Scaling of state innov, can be :full, :diagonal or :none
     FisherInfo=FisherInfoPois,# Fisher info
+    FisherInfoPrior =FisherInfoPois, 
     nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
     fixed_scaling = true,
     verbose=true,             # Whether to print verbose output during sampling.
@@ -135,7 +128,98 @@ energyScoreAll = []
 variogramScoreAll = []
 MethodLabels = []
 
+algoSettings = (
+    stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
+    nParticles=100,           # Number of particles if using PGAS
+    nIter=1000,               # Number of iterations in the Gibbs sampler
+    nBurn=1000,               # Number of burn-in iterations
+    nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
+    nPrePGAS=100,             # Number of pre-PGAS iterations to initialize the particles
+    offsetMethod=eps(),       # Offset for log-volatility
+    h_upper=Inf,              # Upper bound for log-volatility
+    polyaoffset=0.00,         # Offset for Polya-Gamma variables in the update of h_t
+    scaling=:none,            # Scaling of state innov, can be :full, :diagonal or :none
+    FisherInfo=FisherInfoBeta,# Fisher info
+    FisherInfoPrior = FisherInfoPois,    # prior
+    nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
+    fixed_scaling = true,    # Should the scaling matrix be fixed across Gibbs iter?
+    verbose=true,             # Whether to print verbose output during sampling.
+);
 
+methodlabel = "IPLF"
+obsChoice   = :y
+scaling     = :fulllocal
+FisherInfo  = FisherInfoPois
+nPerGroup   = 5
+
+obsTransform =
+    if obsChoice === :y
+        IdentityTransform()
+    elseif obsChoice === :logy
+        BetaSingleSuffStatGrouped(:logy)
+    elseif obsChoice === :log1my
+        BetaSingleSuffStatGrouped(:log1my)
+    elseif obsChoice === :both
+        BetaSuffStatsGrouped()
+    else
+        error("Unknown obsChoice = $obsChoice")
+end
+
+Y, _, _, groupSizes =splitEqualGroups(y,X,covSel,nPerGroup)
+slrObs =prepare_observation_transform(obsTransform,Y,condMean,condCov,nPerGroup)
+
+algoSettings_iplf = (;algoSettings...,scaling = scaling, nMaxIter=10, stateSamplingMethod = :ffbs_slr, FisherInfo=FisherInfo)
+dataSettings_iplf = (y = y,X = X,covSel = covSel,nPerGroup = nPerGroup)
+modelSettings_iplf = (;modelSettings...,slrObs = slrObs)
+
+Random.seed!(20)
+θpost_iplf, groupSizes_iplf, nFailure_iplf = GibbsTVGLM(dataSettings_iplf,priorSettings,modelSettings_iplf,algoSettings_iplf)
+#θpost_iplf = copy(θpost_iplf_delta05_loglink_gr10)
+
+# For me: without contrained version: covariances are singular, fails
+# For me: constrained version, delta=0.5: better
+# For me: constrained version, delta=0.5, diffrenet seed, smaller offsets: better
+# Check why innovation gain is not PD at some iterations still
+# Now running centered and delta 0.5 - bad
+# weighted better
+
+prcFailure_iplf = 100 * nFailure_iplf[] /(algoSettings_iplf.nBurn + algoSettings_iplf.nIter)
+println("$(algoSettings_iplf.stateSamplingMethod) failed at ","$(prcFailure_iplf)% of the simulated trajectories")
+
+param_quantiles = quantile_multidim(θpost_iplf,[0.025, 0.5, 0.975],dims = 3)
+plt = plot_param_path_poisreg(β)
+PlotPostParamEvolution!(plt,param_quantiles,"IPLF",groupSizes_iplf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[4])
+display(plt)
+
+
+# ============================================================
+# 2. LAPLACE
+# ============================================================
+methodlabel = "Laplace-None"
+algoSettings_laplace = (;algoSettings...,scaling = scaling,stateSamplingMethod = :ffbs_laplace, FisherInfo=FisherInfo)
+dataSettings_laplace = (y = y,X = X,covSel = covSel,nPerGroup = nPerGroup)
+priorSettings_laplace = (;priorSettings..., n₀=1)
+
+#Random.seed!(2)
+θpost_laplace, groupSizes_laplace,  nFailure, nLaplaceFailure =GibbsTVGLM(dataSettings_laplace,priorSettings_laplace,modelSettings,algoSettings_laplace)
+prcFailure_laplace =100 * nFailure[] /(algoSettings_laplace.nBurn + algoSettings_laplace.nIter)
+println("$(algoSettings_laplace.stateSamplingMethod) failed at ","$(prcFailure_laplace)% of the simulated trajectories")
+Y, Z, _, _ =splitEqualGroups(y,X,covSel,nPerGroup)
+nLaplaceTotal =(algoSettings.nBurn + algoSettings.nIter) * length(Y)
+prcLaplaceFailure =100 * nLaplaceFailure[] / nLaplaceTotal
+println("Laplace mode optimization failed at ", round(prcLaplaceFailure, digits = 2),"% of the filtering updates.")
+
+quant_paramtime_laplace =quantile_multidim(θpost_laplace,[0.025, 0.5, 0.975],dims = 3)
+#plt_overlay = plot(layout = (3, 1),size = (900, 650),legend = :topright)
+PlotPostParamEvolution!(plt,quant_paramtime_laplace,"Laplace",groupSizes_laplace;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[3])
+display(plt)
+#savefig(plt_overlay,joinpath(save_dir, "laplace_homo_gr1_layof_4000iters.pdf"))
+
+
+
+
+
+#################
 ## PGAS
 methodlabel = "PGAS"
 algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:pgas);

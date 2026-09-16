@@ -205,7 +205,7 @@ algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
     nIter=3000,               # Number of iterations in the Gibbs sampler
-    nBurn=2000,               # Number of burn-in iterations
+    nBurn=3000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=100,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility
@@ -222,7 +222,7 @@ algoSettings = (
 methodlabel = "IPLF"
 obsChoice   = :both
 scaling     = :fulllocal
-FisherInfo  = = FisherInfoBeta_local
+FisherInfo  = FisherInfoBeta_local
 nPerGroup   = 5
 
 obsTransform =
@@ -240,6 +240,7 @@ end
 
 Y, _, _, groupSizes =splitEqualGroups(y,X,covSel,nPerGroup)
 slrObs =prepare_observation_transform(obsTransform,Y,condMean,condCov,nPerGroup)
+
 
 algoSettings_iplf = (;algoSettings...,scaling = scaling, nMaxIter=10, stateSamplingMethod = :ffbs_slr, FisherInfo=FisherInfo)
 dataSettings_iplf = (y = y,X = X,covSel = covSel,nPerGroup = nPerGroup)
