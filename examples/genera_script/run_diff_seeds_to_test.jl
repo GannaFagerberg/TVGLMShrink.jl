@@ -34,7 +34,7 @@ for (i, seed) in enumerate(seeds)
     #θpost_seed[i],_,_,_ = GibbsTVGLM(dataSettings_laplace,priorSettings_laplace,modelSettings,algoSettings_laplace) 
     
     #IPLF
-    θpost_seed[i],_,_,_ = GibbsTVGLM(dataSettings_iplf,priorSettings_iplf,modelSettings_iplf,algoSettings_iplf)
+    θpost_seed[i],_,_,_ = GibbsTVGLM(dataSettings_iplf,priorSettings,modelSettings_iplf,algoSettings_iplf)
 
     #IEKF
     #θpost_seed[i],_,_,_ =GibbsTVGLM(dataSettings_iekf,priorSettings,modelSettings_iekf,algoSettings_iekf)
@@ -76,8 +76,8 @@ end
 # Overlay all seeds
 # ------------------------------------------------------------
 
-#plt_overlay = plot(layout = (3, 1),size = (900, 650),legend = :topright)
-plt_overlay          = plot_param_path_betareg(β,γ)
+plt_overlay = plot(layout = (3, 1),size = (900, 650),legend = :topright)
+#plt_overlay          = plot_param_path_betareg(β,γ)
 for i in eachindex(seeds)
 
     PlotPostParamEvolution!(
@@ -104,16 +104,26 @@ display(plt_overlay)
 #savefig(plt_overlay,joinpath(save_dir, "iplf_full.pdf"))
 #savefig(plt_overlay,joinpath(save_dir, "iplf_fulllocal.pdf"))
 
+savefig(plt_overlay,joinpath(save_dir, "iplf_simInvGass_none.pdf"))
+
 
 #savefig(plt_overlay,joinpath(save_dir, "iplf_betasim_none_bounded.pdf"))
 #quant_sbetasim_none_bounded = copy(quant_seed)
-savefig(plt_overlay,joinpath(save_dir, "iplf_betasim_none.pdf"))
-quant_sbetasim_none = copy(quant_seed)
+#savefig(plt_overlay,joinpath(save_dir, "iplf_betasim_none.pdf"))
+#quant_sbetasim_none = copy(quant_seed)
+
+#quant_seed = quant_sbetasim_none_bounded
+
+
+#@save joinpath(save_dir, "quant_sbetasim_none.jld2") quant_sbetasim_none
+#@save joinpath(save_dir, "quant_sbetasim_none_bounded.jld2") quant_sbetasim_none_bounded
+
+#using JLD2
+#@load joinpath(save_dir, "quant_sbetasim_none.jld2") quant_sbetasim_none
 
 # ------------------------------------------------------------
 # Overlay 5 seeds: old vs new full Laplace
 # ------------------------------------------------------------
-
 
 # ------------------------------------------------------------
 # One plot per seed:

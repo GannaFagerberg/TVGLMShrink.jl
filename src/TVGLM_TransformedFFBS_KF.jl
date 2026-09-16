@@ -343,7 +343,420 @@ end
 # Stores all the log(y) first and then log(1-y)
 # Lopps through every observation
 
-function kalmanfilter_update_transformed_IPLF(
+
+
+function kalmanfilter_update_transformed_IPLF_contrained(
+    mu::AbstractVector,
+    Omega::AbstractMatrix,
+    u::AbstractVector,
+    z::AbstractVector,
+    A::AbstractMatrix,
+    B::AbstractMatrix,
+    condMoments,
+    param,
+    Sigma_n::AbstractMatrix,
+    t,
+    maxIter::Integer,
+    gamma,
+    w_mean::AbstractVector,
+    w_cov::AbstractVector,
+    ws;
+    tol::Real = 1e-2,
+    covariance_floor::Real = 1e-8,
+    return_diagnostics::Bool = false,
+
+    # ----------------------------------------------------------
+    # IG safeguards
+    # ----------------------------------------------------------
+    constrained::Bool = true,
+    #cov_bound::Bool = true,
+    bound_slr_cov::Bool = true,
+    bound_posterior_cov::Bool = false,
+
+    # Precision-state safeguards - bounded
+    delta_gamma::Real = 0.5,
+    sd_gamma_max::Real = 0.5,
+
+    # Precision-state safeguards: OFF
+    #delta_gamma::Real = Inf,
+    #sd_gamma_max::Real = Inf,
+
+    # Mean-predictor safeguards
+    bound_mean_predictor::Bool = false,
+    delta_eta_mu::Real = 0.5,
+    sd_eta_mu_max::Real = 0.5,
+    weighted_mean = false
+)
+
+    maxIter >= 1 || throw(ArgumentError("maxIter must be at least one."))
+
+    # ==========================================================
+    # PRIOR PROPAGATION
+    # ==========================================================
+
+    mu_prior     = A * mu .+ B * u
+    Omega_prior  = A * Omega * A' + Sigma_n
+    mu_iter      = copy(mu_prior)
+    Omega_iter   = copy(Omega_prior)
+    z_vec =z
+    last_diagnostics =nothing
+
+    # ==========================================================
+    # CONSTRAINT SETTINGS
+    # ==========================================================
+
+    if constrained
+        
+        mean_idx =param.Zidx[1] # Mean-state indices
+        precision_indices =param.Zidx[2]  # Precision-state indices
+
+        length(precision_indices) == 1 ||error("IG safeguard currently assumes one precision state.")
+        precision_idx =first(precision_indices)
+
+        var_gamma_max =sd_gamma_max^2 # Precision-state variance bound
+        var_eta_mu_max =sd_eta_mu_max^2 # Mean-predictor variance bound
+
+    end
+
+
+    # ==========================================================
+    # IPLF ITERATIONS
+    # ==========================================================
+
+    for iteration in 1:maxIter
+        # ======================================================
+        # 1. COVARIANCE USED FOR SLR / SIGMA POINTS
+        # ======================================================
+        
+        Omega_slr =copy(Omega_iter)
+        if constrained && bound_slr_cov
+
+        # ==================================================
+        #  1A. BOUND MEAN-PREDICTOR VARIANCE
+        #  eta_mu = Z_mu * beta_mu
+        #  Var(eta_mu)= Z_mu * Omega_mu * Z_mu'
+        # ==================================================
+
+            if bound_mean_predictor
+                Z_mu           = param.Z[1][t]
+                Omega_mu       = Omega_slr[mean_idx,mean_idx]
+                var_eta_mu     = diag(Z_mu *Omega_mu *Z_mu') ## marginal variances of the mean predictor; accounts for grouped case
+                max_var_eta_mu = maximum(var_eta_mu) ### largest predictor variance in the group
+
+                if !isfinite(max_var_eta_mu)
+                    error("IG mean-predictor variance is non-finite.")
+                end
+
+                if max_var_eta_mu > var_eta_mu_max
+                    s_mu =sqrt(var_eta_mu_max /max_var_eta_mu)
+                    view(Omega_slr,mean_idx,:) .*= s_mu #Equivalent to D * Omega * D:
+                    view(Omega_slr,:,mean_idx) .*= s_mu
+                end
+            end
+
+            # ==================================================
+            # 1B. BOUND PRECISION-STATE VARIANCE
+            # ==================================================
+            if Omega_slr[precision_idx,precision_idx] > var_gamma_max
+                s_gamma =sqrt(var_gamma_max /Omega_slr[precision_idx,precision_idx])
+                view(Omega_slr,precision_idx,:) .*= s_gamma
+                view(Omega_slr,:,precision_idx) .*= s_gamma
+            end
+
+            Omega_slr =(Omega_slr +Omega_slr') / 2
+        end
+
+
+        # ======================================================
+        # 2. SIGMA POINTS
+        # ======================================================
+        L =cholesky(Hermitian(Omega_slr)).L
+        spread =L * gamma
+
+        sigma_points =hcat(mu_iter,mu_iter .+ spread,mu_iter .- spread)
+        number_of_points =size(sigma_points, 2)
+
+        length(w_mean) == number_of_points ||
+        throw(DimensionMismatch( "length(w_mean)=$(length(w_mean)), " *"but there are $number_of_points sigma points."))
+
+        length(w_cov) == number_of_points ||
+        throw(DimensionMismatch("length(w_cov)=$(length(w_cov)), " *"but there are $number_of_points sigma points."))
+
+        # ======================================================
+        # 3. CONDITIONAL MOMENTS
+        # ======================================================
+        conditional_means =ws.conditional_means
+        covariance_j =ws.conditional_covariance
+        z_mean =ws.z_mean
+        mean_conditional_covariance =ws.mean_conditional_covariance
+
+        if weighted_mean
+            fill!(z_mean, 0)
+            fill!(mean_conditional_covariance, 0)
+
+            for j in 1:number_of_points
+
+                mean_j =@view conditional_means[:, j]
+                condMoments(mean_j,covariance_j,param,@view(sigma_points[:, j]),t)
+                # ----------------------------------------------
+                # E[h(x)]
+                # ----------------------------------------------
+                z_mean .+=w_mean[j] .* mean_j
+                # ----------------------------------------------
+                # E[Var(z | x)]
+                # this is an expectation, hence w_mean.
+                # ----------------------------------------------
+                mean_conditional_covariance .+=w_mean[j] .* covariance_j
+            end
+        else
+            fill!(mean_conditional_covariance,0)
+            for j in 1:number_of_points
+                mean_j =@view conditional_means[:, j]
+                condMoments(mean_j,covariance_j,param,@view(sigma_points[:, j]),t)
+                mean_conditional_covariance .+=w_mean[j] .* covariance_j  # E[Var(z | x)]
+            end
+
+            # Local reference:
+            z_mean .=@view conditional_means[:, 1]  # h(mu_iter)
+        end
+
+
+        # ======================================================
+        # 4. CROSS COVARIANCE Cov[x,z]
+        # ======================================================
+
+        centered_states =ws.centered_states
+        centered_means =ws.centered_means
+        centered_states .=sigma_points .- mu_iter
+        centered_means .=conditional_means .- z_mean
+        P_xz =ws.P_xz
+        fill!(P_xz, 0)
+
+        @inbounds for j in 1:number_of_points
+            wj =w_cov[j]
+            for b in axes(centered_means, 1)
+                mb =centered_means[b, j]
+                for a in axes(centered_states, 1)
+                    P_xz[a, b] +=wj *centered_states[a, j] *mb
+                end
+            end
+        end
+
+        # ======================================================
+        # 5. TOTAL TRANSFORMED OBSERVATION COVARIANCE
+        # Var(z) =E[Var(z|x)]+ Var(E[z|x])
+        # ======================================================
+
+        P_z  = ws.P_z
+        P_z .= mean_conditional_covariance
+
+        for j in 1:number_of_points
+            wj =w_cov[j]
+            @inbounds for b in axes(centered_means, 1)
+                db =centered_means[b, j]
+                for a in axes(centered_means, 1)
+                    P_z[a, b] +=wj *centered_means[a, j] *db
+                end
+            end
+        end
+
+        # ======================================================
+        # 6. STATISTICAL LINEAR REGRESSION
+        # z ≈ H_k x + b_k + e
+        # P_xz was constructed using Omega_slr,
+        # so Omega_slr must also be used here.
+        # ======================================================
+
+        H_k =P_xz' / Omega_slr
+        b_k =z_mean -H_k * mu_iter
+        
+        # ======================================================
+        # 7. SLR RESIDUAL COVARIANCE
+        # R_k =E[Var(z|x)]+E[(m(x)-z_mean-H(x-mu_iter))(...)]
+        # ======================================================
+
+        R_k =copy(mean_conditional_covariance)
+        for j in 1:number_of_points
+            residual_j =@view(centered_means[:, j]) -H_k *@view(centered_states[:, j])
+            R_k .+=w_cov[j] .*(residual_j *residual_j')
+        end
+        R_k =(R_k +R_k') / 2
+
+        # ======================================================
+        # 8. KALMAN UPDATE USING ACTUAL FILTERING PRIOR
+        # ======================================================
+        z_prior_mean =H_k * mu_prior +b_k
+        innovation_covariance =H_k *Omega_prior *H_k' + R_k
+        gain =Omega_prior *H_k' /innovation_covariance
+        mu_updated =mu_prior +gain *(z_vec -z_prior_mean)
+
+        # ======================================================
+        # 9. CONSTRAINTS
+        # ======================================================
+        if constrained
+            # ==================================================
+            # 9A. UNCONSTRAINED POSTERIOR COVARIANCE
+            # ==================================================
+            C_k =Omega_prior -gain *(H_k *Omega_prior)
+            C_k =(C_k +C_k') / 2
+
+            if !all(isfinite, C_k)
+                error(
+                    "IPLF posterior covariance contains non-finite values."
+                )
+            end
+
+            # ==================================================
+            # 9B. NUMERICAL PSD SAFEGUARD
+            # ==================================================
+            F =eigen(Symmetric(C_k))
+            lambda_min =minimum(F.values)
+
+            if lambda_min < covariance_floor
+                scale =max(opnorm(C_k, Inf),1.0)
+                neg_tol =1e-8 * scale
+                if lambda_min < -neg_tol
+                    error("IPLF posterior covariance is genuinely indefinite: " *"lambda_min = $lambda_min")
+                end
+                vals =max.(F.values,covariance_floor)
+                C_k =F.vectors *Diagonal(vals) *F.vectors'
+                C_k =(C_k +C_k') / 2
+            end
+
+            # ==================================================
+            # 9C. PRECISION-STATE VARIANCE
+            # ==================================================
+            Crr =C_k[precision_idx,precision_idx]
+            if !isfinite(Crr) ||Crr <= 0
+                error(
+                    "IPLF precision-state variance must be finite and positive."
+                )
+            end
+
+            # ==================================================
+            # 10. CONSTRAIN POSTERIOR MEAN / STEP
+            # ==================================================
+            d =mu_updated -mu_iter
+
+            # --------------------------------------------------
+            # 10A. PRECISION STEP
+            # --------------------------------------------------
+            b_gamma =clamp(d[precision_idx],-delta_gamma,delta_gamma)
+
+            if b_gamma != d[precision_idx]
+                C_col =@view C_k[:, precision_idx]
+                adjustment =(b_gamma -d[precision_idx]) / Crr
+                # Covariance-weighted projection
+                d .+=adjustment .* C_col
+                # Enforce requested precision increment exactly
+                d[precision_idx] =b_gamma
+            end
+
+
+            # --------------------------------------------------
+            # 10B. MEAN-PREDICTOR STEP
+            # eta_mu = Z_mu * beta_mu
+            #  max_i |Delta eta_mu,i|
+            # rather than bounding each coefficient separately.
+            # --------------------------------------------------
+
+            if bound_mean_predictor
+                Z_mu =param.Z[1][t]
+                delta_eta_mu_vec =Z_mu *d[mean_idx]
+                max_delta_eta_mu =maximum(abs,delta_eta_mu_vec)
+
+                if !isfinite(max_delta_eta_mu)
+                    error(
+                        "IG mean-predictor increment is non-finite."
+                    )
+                end
+
+                if max_delta_eta_mu > delta_eta_mu
+                    s_mu_step = delta_eta_mu /max_delta_eta_mu
+                    # Preserve direction of the mean-state step,
+                    # but reduce its magnitude so that all
+                    # predictor increments satisfy the bound.
+                    d[mean_idx] .*=s_mu_step
+                end
+            end
+
+            mu_updated =mu_iter +d  # Final constrained mean proposal
+
+            # ==================================================
+            # 11. CONSTRAIN POSTERIOR COVARIANCE
+            # ==================================================
+            if bound_posterior_cov
+                # ----------------------------------------------
+                # 11A. MEAN-PREDICTOR VARIANCE CAP
+                # ----------------------------------------------
+                if bound_mean_predictor
+                    Z_mu =param.Z[1][t]
+                    C_mu = C_k[mean_idx,mean_idx]
+                    var_eta_mu_post =diag(Z_mu * C_mu *Z_mu')
+                    max_var_eta_mu_post =maximum(var_eta_mu_post)
+
+                    if !isfinite(
+                        max_var_eta_mu_post
+                    )
+
+                    error(
+                        "IG posterior mean-predictor variance is non-finite."
+                    )
+                end
+
+                if max_var_eta_mu_post > var_eta_mu_max
+                        s_mu_post =sqrt(var_eta_mu_max /max_var_eta_mu_post)
+                        view(C_k,mean_idx,:) .*= s_mu_post
+                        view(C_k,:,mean_idx) .*= s_mu_post
+                    end
+                end
+
+                # ----------------------------------------------
+                # 11B. PRECISION VARIANCE CAP
+                # ----------------------------------------------
+                Crr = C_k[precision_idx,precision_idx]
+                if Crr > var_gamma_max
+                    s_gamma =sqrt(var_gamma_max /Crr)
+                    view(C_k,precision_idx,:) .*= s_gamma
+                    view(C_k,:,precision_idx) .*= s_gamma
+                end
+
+                C_k .=(C_k +C_k') / 2
+            end
+
+            # Constrained posterior covariance
+            Omega_updated =C_k
+        else
+
+            # ==================================================
+            # Ordinary unconstrained posterior covariance
+            # ==================================================
+            Omega_updated =Omega_prior -gain *innovation_covariance *gain'
+            Omega_updated =(Omega_updated +Omega_updated') / 2
+        end
+
+        # ======================================================
+        # 12. IPLF CONVERGENCE
+        # ======================================================
+        distance = gaussian_kld(mu_iter,Omega_iter,mu_updated,Omega_updated;relative_floor =covariance_floor)
+        mu_iter  = mu_updated
+        Omega_iter = Omega_updated
+        distance < tol && break
+    end
+
+    # ==========================================================
+    # RETURN
+    # ==========================================================
+
+    if return_diagnostic
+        return (mu = mu_iter,Omega = Omega_iter,mu_prior = mu_prior,Omega_prior = Omega_prior,diagnostics = last_diagnostics)
+    end
+
+    return (mu_iter,Omega_iter,mu_prior,Omega_prior)
+end
+
+
+function kalmanfilter_update_transformed_IPLF_contrained _mean_precision(
     mu::AbstractVector,
     Omega::AbstractMatrix,
     u::AbstractVector,
@@ -393,26 +806,12 @@ function kalmanfilter_update_transformed_IPLF(
     # PRIOR PROPAGATION
     # ==========================================================
 
-    mu_prior =
-        A * mu .+ B * u
-
-    Omega_prior =
-        A * Omega * A' + Sigma_n
-
-
-    mu_iter =
-        copy(mu_prior)
-
-    Omega_iter =
-        copy(Omega_prior)
-
-
-    z_vec =
-        z
-
-    last_diagnostics =
-        nothing
-
+    mu_prior =A * mu .+ B * u
+    Omega_prior =A * Omega * A' + Sigma_n
+    mu_iter =copy(mu_prior)
+    Omega_iter =copy(Omega_prior)
+    z_vec =z
+    last_diagnostics =nothing
 
     # ==========================================================
     # CONSTRAINT SETTINGS
@@ -421,52 +820,32 @@ function kalmanfilter_update_transformed_IPLF(
     if constrained
 
         # Mean-state indices
-        mean_idx =
-            param.Zidx[1]
-
+        mean_idx =param.Zidx[1]
         # Precision-state indices
-        precision_indices =
-            param.Zidx[2]
+        precision_indices =param.Zidx[2]
 
         length(precision_indices) == 1 ||
             error(
                 "IG safeguard currently assumes one precision state."
             )
-
-        precision_idx =
-            first(precision_indices)
-
-
+        precision_idx =first(precision_indices)
         # Precision-state variance bound
-        var_gamma_max =
-            sd_gamma_max^2
-
-
+        var_gamma_max =sd_gamma_max^2
         # Mean-predictor variance bound
-        var_eta_mu_max =
-            sd_eta_mu_max^2
+        var_eta_mu_max =sd_eta_mu_max^2
     end
 
-
-    weighted_mean =
-        false
-
-
+    weighted_mean = false
     # ==========================================================
     # IPLF ITERATIONS
     # ==========================================================
 
     for iteration in 1:maxIter
-
-
         # ======================================================
         # 1. COVARIANCE USED FOR SLR / SIGMA POINTS
         # ======================================================
-
-        Omega_slr =
-            copy(Omega_iter)
-
-
+        
+        Omega_slr =copy(Omega_iter)
         if constrained && cov_bound
 
             # ==================================================
@@ -480,42 +859,18 @@ function kalmanfilter_update_transformed_IPLF(
 
             if bound_mean_predictor
 
-                Z_mu =
-                    param.Z[1][t]
-
-                Omega_mu =
-                    Omega_slr[
-                        mean_idx,
-                        mean_idx
-                    ]
-
-                var_eta_mu =
-                    diag(
-                        Z_mu *
-                        Omega_mu *
-                        Z_mu'
-                    )
-
-                max_var_eta_mu =
-                    maximum(var_eta_mu)
-
+                Z_mu =param.Z[1][t]
+                Omega_mu =Omega_slr[mean_idx,mean_idx]
+                var_eta_mu =diag(Z_mu *Omega_mu *Z_mu')
+                max_var_eta_mu =maximum(var_eta_mu)
 
                 if !isfinite(max_var_eta_mu)
-
-                    error(
-                        "IG mean-predictor variance is non-finite."
-                    )
+                    error("IG mean-predictor variance is non-finite.")
                 end
-
 
                 if max_var_eta_mu > var_eta_mu_max
 
-                    s_mu =
-                        sqrt(
-                            var_eta_mu_max /
-                            max_var_eta_mu
-                        )
-
+                    s_mu =sqrt(var_eta_mu_max /max_var_eta_mu)
                     # Equivalent to D * Omega * D:
                     #
                     # scale rows and columns corresponding
@@ -544,14 +899,7 @@ function kalmanfilter_update_transformed_IPLF(
                 precision_idx
             ] > var_gamma_max
 
-                s_gamma =
-                    sqrt(
-                        var_gamma_max /
-                        Omega_slr[
-                            precision_idx,
-                            precision_idx
-                        ]
-                    )
+                s_gamma =sqrt(var_gamma_max /Omega_slr[precision_idx,precision_idx])
 
                 view(
                     Omega_slr,
@@ -568,11 +916,7 @@ function kalmanfilter_update_transformed_IPLF(
 
 
             # Numerical symmetry
-            Omega_slr =
-                (
-                    Omega_slr +
-                    Omega_slr'
-                ) / 2
+            Omega_slr =(Omega_slr +Omega_slr') / 2
         end
 
 
@@ -580,27 +924,11 @@ function kalmanfilter_update_transformed_IPLF(
         # 2. SIGMA POINTS
         # ======================================================
 
-        L =
-            cholesky(
-                Hermitian(Omega_slr)
-            ).L
+        L =cholesky(Hermitian(Omega_slr)).L
+        spread =L * gamma
 
-
-        spread =
-            L * gamma
-
-
-        sigma_points =
-            hcat(
-                mu_iter,
-                mu_iter .+ spread,
-                mu_iter .- spread
-            )
-
-
-        number_of_points =
-            size(sigma_points, 2)
-
+        sigma_points =hcat(mu_iter,mu_iter .+ spread,mu_iter .- spread)
+        number_of_points =size(sigma_points, 2)
 
         length(w_mean) == number_of_points ||
             throw(
@@ -609,7 +937,6 @@ function kalmanfilter_update_transformed_IPLF(
                     "but there are $number_of_points sigma points."
                 )
             )
-
 
         length(w_cov) == number_of_points ||
             throw(
@@ -624,94 +951,49 @@ function kalmanfilter_update_transformed_IPLF(
         # 3. CONDITIONAL MOMENTS
         # ======================================================
 
-        conditional_means =
-            ws.conditional_means
-
-        covariance_j =
-            ws.conditional_covariance
-
-        z_mean =
-            ws.z_mean
-
-        mean_conditional_covariance =
-            ws.mean_conditional_covariance
-
+        conditional_means =ws.conditional_means
+        covariance_j =ws.conditional_covariance
+        z_mean =ws.z_mean
+        mean_conditional_covariance =ws.mean_conditional_covariance
 
         if weighted_mean
-
             fill!(z_mean, 0)
             fill!(mean_conditional_covariance, 0)
 
-
             for j in 1:number_of_points
 
-                mean_j =
-                    @view conditional_means[:, j]
-
-
-                condMoments(
-                    mean_j,
-                    covariance_j,
-                    param,
-                    @view(sigma_points[:, j]),
-                    t
-                )
-
+                mean_j =@view conditional_means[:, j]
+                condMoments(mean_j,covariance_j,param,@view(sigma_points[:, j]),t)
 
                 # ----------------------------------------------
                 # E[h(x)]
                 # ----------------------------------------------
-
-                z_mean .+=
-                    w_mean[j] .* mean_j
-
-
+                z_mean .+=w_mean[j] .* mean_j
                 # ----------------------------------------------
                 # E[Var(z | x)]
                 #
                 # Important:
                 # this is an expectation, hence w_mean.
                 # ----------------------------------------------
-
-                mean_conditional_covariance .+=
-                    w_mean[j] .* covariance_j
+                mean_conditional_covariance .+=w_mean[j] .* covariance_j
             end
 
 
         else
 
-            fill!(
-                mean_conditional_covariance,
-                0
-            )
-
+            fill!(mean_conditional_covariance,0)
 
             for j in 1:number_of_points
-
-                mean_j =
-                    @view conditional_means[:, j]
-
-
-                condMoments(
-                    mean_j,
-                    covariance_j,
-                    param,
-                    @view(sigma_points[:, j]),
-                    t
-                )
-
-
+                mean_j =@view conditional_means[:, j]
+                condMoments(mean_j,covariance_j,param,@view(sigma_points[:, j]),t)
                 # E[Var(z | x)]
-                mean_conditional_covariance .+=
-                    w_mean[j] .* covariance_j
+                mean_conditional_covariance .+=w_mean[j] .* covariance_j
             end
 
 
             # Local reference:
-            #
             # h(mu_iter)
-            z_mean .=
-                @view conditional_means[:, 1]
+            z_mean .=@view conditional_means[:, 1]
         end
 
 
@@ -719,48 +1001,22 @@ function kalmanfilter_update_transformed_IPLF(
         # 4. CROSS COVARIANCE Cov[x,z]
         # ======================================================
 
-        centered_states =
-            ws.centered_states
-
-        centered_means =
-            ws.centered_means
-
-
-        centered_states .=
-            sigma_points .- mu_iter
-
-
-        centered_means .=
-            conditional_means .- z_mean
-
-
-        P_xz =
-            ws.P_xz
-
-
+        centered_states =ws.centered_states
+        centered_means =ws.centered_means
+        centered_states .=sigma_points .- mu_iter
+        centered_means .=conditional_means .- z_mean
+        P_xz =ws.P_xz
         fill!(P_xz, 0)
 
-
         @inbounds for j in 1:number_of_points
-
-            wj =
-                w_cov[j]
-
+            wj =w_cov[j]
             for b in axes(centered_means, 1)
-
-                mb =
-                    centered_means[b, j]
-
+                mb =centered_means[b, j]
                 for a in axes(centered_states, 1)
-
-                    P_xz[a, b] +=
-                        wj *
-                        centered_states[a, j] *
-                        mb
+                    P_xz[a, b] +=wj *centered_states[a, j] *mb
                 end
             end
         end
-
 
         # ======================================================
         # 5. TOTAL TRANSFORMED OBSERVATION COVARIANCE
@@ -772,30 +1028,16 @@ function kalmanfilter_update_transformed_IPLF(
         # Var(E[z|x])
         # ======================================================
 
-        P_z =
-            ws.P_z
-
-
-        P_z .=
-            mean_conditional_covariance
-
+        P_z =ws.P_z
+        P_z .=mean_conditional_covariance
 
         for j in 1:number_of_points
 
-            wj =
-                w_cov[j]
-
+            wj =w_cov[j]
             @inbounds for b in axes(centered_means, 1)
-
-                db =
-                    centered_means[b, j]
-
+                db =centered_means[b, j]
                 for a in axes(centered_means, 1)
-
-                    P_z[a, b] +=
-                        wj *
-                        centered_means[a, j] *
-                        db
+                    P_z[a, b] +=wj *centered_means[a, j] *db
                 end
             end
         end
@@ -811,15 +1053,8 @@ function kalmanfilter_update_transformed_IPLF(
         # so Omega_slr must also be used here.
         # ======================================================
 
-        H_k =
-            P_xz' / Omega_slr
-
-
-        b_k =
-            z_mean -
-            H_k * mu_iter
-
-
+        H_k =P_xz' / Omega_slr
+        b_k =z_mean -H_k * mu_iter
         # ======================================================
         # 7. SLR RESIDUAL COVARIANCE
         #
@@ -835,67 +1070,25 @@ function kalmanfilter_update_transformed_IPLF(
         # ]
         # ======================================================
 
-        R_k =
-            copy(
-                mean_conditional_covariance
-            )
-
+        R_k =copy(mean_conditional_covariance)
 
         for j in 1:number_of_points
-
-            residual_j =
-                @view(centered_means[:, j]) -
-                H_k *
-                @view(centered_states[:, j])
-
-
-            R_k .+=
-                w_cov[j] .*
-                (
-                    residual_j *
-                    residual_j'
-                )
+            residual_j =@view(centered_means[:, j]) -H_k *@view(centered_states[:, j])
+            R_k .+=w_cov[j] .*(residual_j *residual_j')
         end
 
-
-        R_k =
-            (
-                R_k +
-                R_k'
-            ) / 2
-
+        R_k =(R_k +R_k') / 2
 
         # ======================================================
         # 8. KALMAN UPDATE USING ACTUAL FILTERING PRIOR
         # ======================================================
 
-        z_prior_mean =
-            H_k * mu_prior +
-            b_k
-
-
-        innovation_covariance =
-            H_k *
-            Omega_prior *
-            H_k' +
-            R_k
-
-
-        gain =
-            Omega_prior *
-            H_k' /
-            innovation_covariance
-
+        z_prior_mean =H_k * mu_prior +b_k
+        innovation_covariance =H_k *Omega_prior *H_k' +R_k
+        gain =Omega_prior *H_k' /innovation_covariance
 
         # Ordinary unconstrained IPLF proposal
-        mu_updated =
-            mu_prior +
-            gain *
-            (
-                z_vec -
-                z_prior_mean
-            )
-
+        mu_updated =mu_prior +gain *(z_vec -z_prior_mean)
 
         # ======================================================
         # 9. CONSTRAINTS
@@ -903,153 +1096,69 @@ function kalmanfilter_update_transformed_IPLF(
 
         if constrained
 
-
             # ==================================================
             # 9A. UNCONSTRAINED POSTERIOR COVARIANCE
             # ==================================================
 
-            C_k =
-                Omega_prior -
-                gain *
-                (
-                    H_k *
-                    Omega_prior
-                )
-
-
-            C_k =
-                (
-                    C_k +
-                    C_k'
-                ) / 2
-
+            C_k =Omega_prior -gain *(H_k *Omega_prior)
+            C_k =(C_k +C_k') / 2
 
             if !all(isfinite, C_k)
-
                 error(
                     "IPLF posterior covariance contains non-finite values."
                 )
             end
 
-
             # ==================================================
             # 9B. NUMERICAL PSD SAFEGUARD
             # ==================================================
 
-            F =
-                eigen(
-                    Symmetric(C_k)
-                )
-
-
-            lambda_min =
-                minimum(F.values)
-
+            F =eigen(Symmetric(C_k))
+            lambda_min =minimum(F.values)
 
             if lambda_min < covariance_floor
 
-                scale =
-                    max(
-                        opnorm(C_k, Inf),
-                        1.0
-                    )
-
-                neg_tol =
-                    1e-8 * scale
-
+                scale =max(opnorm(C_k, Inf),1.0)
+                neg_tol =1e-8 * scale
 
                 if lambda_min < -neg_tol
-
-                    error(
-                        "IPLF posterior covariance is genuinely indefinite: " *
-                        "lambda_min = $lambda_min"
-                    )
+                    error("IPLF posterior covariance is genuinely indefinite: " *"lambda_min = $lambda_min")
                 end
 
-
-                vals =
-                    max.(
-                        F.values,
-                        covariance_floor
-                    )
-
-
-                C_k =
-                    F.vectors *
-                    Diagonal(vals) *
-                    F.vectors'
-
-
-                C_k =
-                    (
-                        C_k +
-                        C_k'
-                    ) / 2
+                vals =max.(F.values,covariance_floor)
+                C_k =F.vectors *Diagonal(vals) *F.vectors'
+                C_k =(C_k +C_k') / 2
             end
-
 
             # ==================================================
             # 9C. PRECISION-STATE VARIANCE
             # ==================================================
 
-            Crr =
-                C_k[
-                    precision_idx,
-                    precision_idx
-                ]
-
-
-            if !isfinite(Crr) ||
-               Crr <= 0
-
+            Crr =C_k[precision_idx,precision_idx]
+            if !isfinite(Crr) ||Crr <= 0
                 error(
                     "IPLF precision-state variance must be finite and positive."
                 )
             end
 
-
             # ==================================================
             # 10. CONSTRAIN POSTERIOR MEAN / STEP
             # ==================================================
-
-            d =
-                mu_updated -
-                mu_iter
-
+            d =mu_updated -mu_iter
 
             # --------------------------------------------------
             # 10A. PRECISION STEP
             # --------------------------------------------------
 
-            b_gamma =
-                clamp(
-                    d[precision_idx],
-                    -delta_gamma,
-                    delta_gamma
-                )
-
+            b_gamma =clamp(d[precision_idx],-delta_gamma,delta_gamma)
 
             if b_gamma != d[precision_idx]
-
-                C_col =
-                    @view C_k[:, precision_idx]
-
-
-                adjustment =
-                    (
-                        b_gamma -
-                        d[precision_idx]
-                    ) / Crr
-
-
+                C_col =@view C_k[:, precision_idx]
+                adjustment =(b_gamma -d[precision_idx]) / Crr
                 # Covariance-weighted projection
-                d .+=
-                    adjustment .* C_col
-
-
+                d .+=adjustment .* C_col
                 # Enforce requested precision increment exactly
-                d[precision_idx] =
-                    b_gamma
+                d[precision_idx] =b_gamma
             end
 
 
@@ -1066,53 +1175,29 @@ function kalmanfilter_update_transformed_IPLF(
             # --------------------------------------------------
 
             if bound_mean_predictor
+                Z_mu =param.Z[1][t]
 
-                Z_mu =
-                    param.Z[1][t]
-
-
-                delta_eta_mu_vec =
-                    Z_mu *
-                    d[mean_idx]
-
-
-                max_delta_eta_mu =
-                    maximum(
-                        abs,
-                        delta_eta_mu_vec
-                    )
-
+                delta_eta_mu_vec =Z_mu *d[mean_idx]
+                max_delta_eta_mu =maximum(abs,delta_eta_mu_vec)
 
                 if !isfinite(max_delta_eta_mu)
-
                     error(
                         "IG mean-predictor increment is non-finite."
                     )
                 end
 
-
-                if max_delta_eta_mu >
-                   delta_eta_mu
-
-                    s_mu_step =
-                        delta_eta_mu /
-                        max_delta_eta_mu
-
-
+                if max_delta_eta_mu > delta_eta_mu
+                    s_mu_step = delta_eta_mu /max_delta_eta_mu
                     # Preserve direction of the mean-state step,
                     # but reduce its magnitude so that all
                     # predictor increments satisfy the bound.
-                    d[mean_idx] .*=
-                        s_mu_step
+                    d[mean_idx] .*=s_mu_step
                 end
             end
 
 
             # Final constrained mean proposal
-            mu_updated =
-                mu_iter +
-                d
-
+            mu_updated =mu_iter +d
 
             # ==================================================
             # 11. CONSTRAIN POSTERIOR COVARIANCE
@@ -1120,194 +1205,75 @@ function kalmanfilter_update_transformed_IPLF(
 
             if cov_bound
 
-
                 # ----------------------------------------------
                 # 11A. MEAN-PREDICTOR VARIANCE CAP
                 # ----------------------------------------------
 
                 if bound_mean_predictor
-
-                    Z_mu =
-                        param.Z[1][t]
-
-
-                    C_mu =
-                        C_k[
-                            mean_idx,
-                            mean_idx
-                        ]
-
-
-                    var_eta_mu_post =
-                        diag(
-                            Z_mu *
-                            C_mu *
-                            Z_mu'
-                        )
-
-
-                    max_var_eta_mu_post =
-                        maximum(
-                            var_eta_mu_post
-                        )
-
+                    Z_mu =param.Z[1][t]
+                    C_mu = C_k[mean_idx,mean_idx]
+                    var_eta_mu_post =diag(Z_mu * C_mu *Z_mu')
+                    max_var_eta_mu_post =maximum(var_eta_mu_post)
 
                     if !isfinite(
                         max_var_eta_mu_post
                     )
 
-                        error(
-                            "IG posterior mean-predictor variance is non-finite."
-                        )
-                    end
-
-
-                    if max_var_eta_mu_post >
-                       var_eta_mu_max
-
-                        s_mu_post =
-                            sqrt(
-                                var_eta_mu_max /
-                                max_var_eta_mu_post
-                            )
-
-
-                        view(
-                            C_k,
-                            mean_idx,
-                            :
-                        ) .*= s_mu_post
-
-
-                        view(
-                            C_k,
-                            :,
-                            mean_idx
-                        ) .*= s_mu_post
-                    end
+                    error(
+                        "IG posterior mean-predictor variance is non-finite."
+                    )
                 end
 
+                if max_var_eta_mu_post > var_eta_mu_max
+                        s_mu_post =sqrt(var_eta_mu_max /max_var_eta_mu_post)
+                        view(C_k,mean_idx,:) .*= s_mu_post
+                        view(C_k,:,mean_idx) .*= s_mu_post
+                    end
+                end
 
                 # ----------------------------------------------
                 # 11B. PRECISION VARIANCE CAP
                 # ----------------------------------------------
-
-                Crr =
-                    C_k[
-                        precision_idx,
-                        precision_idx
-                    ]
-
-
+                Crr = C_k[precision_idx,precision_idx]
                 if Crr > var_gamma_max
-
-                    s_gamma =
-                        sqrt(
-                            var_gamma_max /
-                            Crr
-                        )
-
-
-                    view(
-                        C_k,
-                        precision_idx,
-                        :
-                    ) .*= s_gamma
-
-
-                    view(
-                        C_k,
-                        :,
-                        precision_idx
-                    ) .*= s_gamma
+                    s_gamma =sqrt(var_gamma_max /Crr)
+                    view(C_k,precision_idx,:) .*= s_gamma
+                    view(C_k,:,precision_idx) .*= s_gamma
                 end
 
-
                 # Numerical symmetry
-                C_k .=
-                    (
-                        C_k +
-                        C_k'
-                    ) / 2
+                C_k .=(C_k +C_k') / 2
             end
 
-
             # Constrained posterior covariance
-            Omega_updated =
-                C_k
-
-
+            Omega_updated =C_k
         else
 
             # ==================================================
             # Ordinary unconstrained posterior covariance
             # ==================================================
-
-            Omega_updated =
-                Omega_prior -
-                gain *
-                innovation_covariance *
-                gain'
-
-
-            Omega_updated =
-                (
-                    Omega_updated +
-                    Omega_updated'
-                ) / 2
+            Omega_updated =Omega_prior -gain *innovation_covariance *gain'
+            Omega_updated =(Omega_updated +Omega_updated') / 2
         end
-
 
         # ======================================================
         # 12. IPLF CONVERGENCE
         # ======================================================
-
-        distance =
-            gaussian_kld(
-                mu_iter,
-                Omega_iter,
-                mu_updated,
-                Omega_updated;
-                relative_floor =
-                    covariance_floor
-            )
-
-
-        mu_iter =
-            mu_updated
-
-
-        Omega_iter =
-            Omega_updated
-
-
-        distance < tol &&
-            break
+        distance = gaussian_kld(mu_iter,Omega_iter,mu_updated,Omega_updated;relative_floor =covariance_floor)
+        mu_iter  = mu_updated
+        Omega_iter = Omega_updated
+        distance < tol && break
     end
-
 
     # ==========================================================
     # RETURN
     # ==========================================================
 
-    if return_diagnostics
-
-        return (
-            mu = mu_iter,
-            Omega = Omega_iter,
-            mu_prior = mu_prior,
-            Omega_prior = Omega_prior,
-            diagnostics = last_diagnostics
-        )
+    if return_diagnostic
+        return (mu = mu_iter,Omega = Omega_iter,mu_prior = mu_prior,Omega_prior = Omega_prior,diagnostics = last_diagnostics)
     end
 
-
-    return (
-        mu_iter,
-        Omega_iter,
-        mu_prior,
-        Omega_prior
-    )
+    return (mu_iter,Omega_iter,mu_prior,Omega_prior)
 end
 
 

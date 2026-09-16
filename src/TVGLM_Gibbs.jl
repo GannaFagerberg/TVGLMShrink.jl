@@ -143,7 +143,11 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     μ = copy(m₀)
     σ²ₙ = copy(ψ₀)
     ϕ = copy(ϕ₀)
-    H = repeat(μ', T)
+    
+    μ̄_init = μ .+ log(groupsize_common)
+    H = repeat(μ̄_init', T)
+
+    #H = repeat(μ', T)
     H̃ = H .- μ'
     ξ = ones(T, nState)
     θ = zeros(T + 1, nState) # Regression coefficients evolution

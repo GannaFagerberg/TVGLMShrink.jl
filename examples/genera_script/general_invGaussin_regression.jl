@@ -256,15 +256,12 @@ end
     ημ = param.Z[1][t] * state[param.Zidx[1]]
     ηκ = param.Z[2][t] * state[param.Zidx[2]]
 
-    μ = linkinv.(param.link[1], ημ)
-    κ = linkinv.(param.link[2], ηκ)
+    μ = linkinv.(Ref(param.link[1]), ημ)
+    κ = linkinv.(Ref(param.link[2]), ηκ)
 
-    # Both parameters must be positive
     μ = max.(μ, 1e-12)
     κ = max.(κ, 1e-10)
 
-    # Inverse Gaussian:
-    # Var(Y | μ, κ) = μ^3 / κ
     variance_y = μ.^3 ./ κ
 
     return Matrix(Diagonal(vec(variance_y)))
@@ -318,7 +315,7 @@ algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
     nIter=5000,              # Number of iterations in the Gibbs sampler
-    nBurn=2000,               # Number of burn-in iterations
+    nBurn=3000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility
@@ -376,8 +373,30 @@ display(plt_overlay)
 # 2. IPLF
 # ============================================================
 
+
+algoSettings = (
+    stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
+    nParticles=100,           # Number of particles if using PGAS
+    nIter=5000,              # Number of iterations in the Gibbs sampler
+    nBurn=3000,               # Number of burn-in iterations
+    nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
+    nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
+    offsetMethod=eps(),       # Offset for log-volatility
+    h_upper=Inf,              # Upper bound for log-volatility
+    polyaoffset=0.00,          # Offset for Polya-Gamma variables in the update of h_t
+    scaling=:none,            # Scaling of state innov, can be :full, :diagonal or :none
+    FisherInfo=FisherInfoInverseGaussian,# Fisher info
+    FisherInfoPrior=FisherInfoInverseGaussian,
+    nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
+    fixed_scaling = false,     # Should the scaling matrix be fixed across Gibbs iter?
+    verbose=true,             # Whether to print verbose output during sampling.
+);
+
+
+
 methodlabel = "IPLF"
 obsChoice = :both
+scaling      = :none
 
 obsTransform =
     if obsChoice === :y
@@ -389,6 +408,7 @@ obsTransform =
     end
 
 
+Y, _, _, groupSizes_iplf =splitEqualGroups(y,X,covSel,nPerGroup)
 slrObs =prepare_observation_transform(obsTransform,Y,condMean,condCov,nPerGroup)
 
 algoSettings_iplf = (;algoSettings..., nMaxIter=10, scaling = scaling,stateSamplingMethod = :ffbs_slr, FisherInfo = FisherInfo)

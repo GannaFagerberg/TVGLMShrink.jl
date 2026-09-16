@@ -222,7 +222,7 @@ algoSettings = (
 methodlabel = "IPLF"
 obsChoice   = :both
 scaling     = :fulllocal
-FisherInfo  = FisherInfoBeta
+FisherInfo  = = FisherInfoBeta_local
 nPerGroup   = 5
 
 obsTransform =
