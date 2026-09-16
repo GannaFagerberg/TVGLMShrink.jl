@@ -24,168 +24,272 @@ gr(legend=:topleft, grid=false, color=colors[2], lw=2, legendfontsize=12,
 
 Random.seed!(slurm_id); # set seed for reproducibility, different seed for each slurm_id
 
-# Simulate data from the Beta regression model with fixed parameter paths
+
 using Random
 using Distributions
 
 # ==========================================================
-# Simulate Beta data with time-varying mean and precision
-# No regression covariates
+# Simulate Inverse Gaussian data with
+# time-varying mean and shape
+# No changes to the basic regression dynamics
 # ==========================================================
 
 Random.seed!(12345)
 
-## Simulate data from the different regression model with fixed parameter paths
-T = 500;
-β₀ = [2, 0]
-p = size(β₀, 1)[1]
+T = 500
 
-## Generate covariate
+β₀ = [2.0, 0.0]
+p = size(β₀, 1)
+
+# ----------------------------------------------------------
+# Generate covariates
+# ----------------------------------------------------------
+
 X_regressors = ones(T + 1)
-X_regressors = hcat(X_regressors, simulateAR(T + 1, [0.7], 1.0))
+X_regressors = hcat(
+    X_regressors,
+    simulateAR(T + 1, [0.7], 1.0)
+)
 
-## fixed parameter paths
+# ----------------------------------------------------------
+# Fixed parameter paths for the mean
+# μ_t = exp(X_t' β_t)
+# ----------------------------------------------------------
+
 function simulate_μ(X, T, p, link, β₀)
+
     β = zeros(T + 1, p)
     β[1, :] = β₀
-    λtime = zeros(T + 1)
 
-    for t in 2:(T+1)
+    μtime = zeros(T + 1)
+
+    for t in 2:(T + 1)
+
         β[t, 1] = sin(2π * t / T)
+
         if t < T / 3
-            β[t, 2] = 0
+
+            β[t, 2] = 0.0
+
+        elseif t < (2 / 3) * T
+
+            β[t, 2] = -1.0
+
         else
-            if t < ((2 / 3) * T)
-                β[t, 2] = -1
-            else
-                β[t, 2] = 1
-            end
+
+            β[t, 2] = 1.0
+
         end
 
-        λtime[t] = linkinv.(link[1], dot(β[t, :], X[t, :]))
-        end
+        ημ = dot(β[t, :], X[t, :])
 
-    return β[2:end, :], λtime[2:end]
+        μtime[t] = linkinv(link[1], ημ)
+    end
+
+    return β[2:end, :], μtime[2:end]
 end
 
-γ = [t < T / 2 ? 1 : 3 for t in 1:T]
-#γ = [t < T / 2 ? 1 : 9 for t in 1:T]
 
-# Example time-varying paths
-#γ = zeros(T, q)
-#for t in 1:T
-    #γ[t, 1] = 0.8 * sin(2.5π * t / 150)
-#end
+# ----------------------------------------------------------
+# Time-varying shape / precision parameter
+#
+# λ_t = exp(γ_t)
+# ----------------------------------------------------------
 
+γ = [t < T / 2 ? 1.0 : 3.0 for t in 1:T]
 
 ψtime = exp.(γ)
 
-BetaMean(μ, ψ) = Beta(1.0e-15 + μ * ψ, 1.0e-15 + (1 - μ) * ψ)
-invlink_logit = (LogitLink(),)
 
-β,μtime = simulate_μ(X_regressors, T, p, invlink_logit, β₀)
+# ----------------------------------------------------------
+# Mean link
+#
+# Inverse Gaussian mean must be positive,
+# so use the log link rather than the Beta logit link
+# ----------------------------------------------------------
 
-y = [rand(BetaMean(μtime[t],ψtime[t])) for t in 1:T]
-y = clamp.(y, 1e-16, 1-1e-16)
-#BetaData = [y X[2:end,:] β γ μtime ψtime ]
+invlink_log = (LogLinLink(),)
 
-# Beta shape parameters
-αtime = μtime .* ψtime
-βtime = (1 .- μtime) .* ψtime
+β, μtime = simulate_μ(
+    X_regressors,
+    T,
+    p,
+    invlink_log,
+    β₀
+)
 
-# plot the parameter evolution path of the regression coefficients
+
+# ----------------------------------------------------------
+# Inverse Gaussian distribution
+#
+# Distributions.jl:
+# InverseGaussian(mean, shape)
+# ----------------------------------------------------------
+
+InverseGaussianMean(μ, ψ) = InverseGaussian(μ, ψ)
+
+
+# ----------------------------------------------------------
+# Simulate observations
+# ----------------------------------------------------------
+
+y = [
+    rand(InverseGaussianMean(μtime[t], ψtime[t]))
+    for t in 1:T
+]
+
+
+# ----------------------------------------------------------
+# Useful conditional variance path
+#
+# Var(Y_t | state_t) = μ_t^3 / ψ_t
+# ----------------------------------------------------------
+
+vartime = μtime.^3 ./ ψtime
+
+
+# ----------------------------------------------------------
+# Parameter path
+# ----------------------------------------------------------
+
 plt = plot_param_path_betareg(β, γ)
-
-# plot the evolution of the Beta distribution parameters over time
-plot_betaparam_evolution(μtime, ψtime, αtime, βtime)
-
-# plot the evolution of the Beta density over time and the time series
-plot_betadensity_evolution(μtime, ψtime, y)
 
 
 # ----------------------------------------------------------
 # Link functions
 # ----------------------------------------------------------
 
-link = (LogitLink(), LogLinLink()) # best so far
+link = (LogLinLink(), LogLinLink())
 #invlink = (x -> logistic(x), x -> exp(x))
 
 
-# ==========================================================
-# SIMULATE OBSERVATIONS
-# ==========================================================
-sum(y==1)
-sum(y==0)
-
-y = clamp.(y, 1e-12, 1 - 1e-12)
 plot(y)
 
 
 # ==========================================================
 # VARIABLES KEPT FOR COMPATIBILITY WITH LATER CODE
 # ==========================================================
-# There are no actual regressors.
-# X contains only the intercept column.
 
-X        = X_regressors[2:end,:]
-covSel   = [[1,2], [1]]
-p        = length(covSel[1])
-q        = length(covSel[2])
+X      = X_regressors[2:end, :]
+covSel = [[1, 2], [1]]
 
-# No covariate-generating AR processes
-#ρ  = Float64[]
-#σₑ = Float64[]
-#mₑ = Float64[]
+p = length(covSel[1])   # mean states
+q = length(covSel[2])   # shape/precision states
 
-## The prior for the state at time t=0 using priors on intercepts and Fisher info
 
-## The prior for the state at time t=0 using priors on intercepts and Fisher info
+# ==========================================================
+# PRIOR MEAN FOR THE STATE AT t = 0
+# ==========================================================
+
+# Moment estimates from the first observations
+#
+# Inverse Gaussian:
+#
+#   E[Y]   = μ
+#   Var[Y] = μ^3 / λ
+#
+# Hence:
+#
+#   μ = E[Y]
+#   λ = μ^3 / Var[Y]
+
 m = mean(y[1:20])
 v = var(y[1:20])
-priorparam = [m, m * (1 - m) / v - 1] # Prior for y₀ ∼ BetaMean(priorparam[1], priorparam[2])
-#f_μ(x) = priorparam[1] - linkinv(link[1], x)
+
+priorparam = [
+    m,
+    m^3 / v
+]
+
+
+# ----------------------------------------------------------
+# Mean state
+# ----------------------------------------------------------
+
 f_μ(x) = priorparam[1] - linkinv(link[1], x)
-β_m0 = [find_zero(f_μ, 0.0); zeros(p - 1)]
+
+β_m0 = [
+    find_zero(f_μ, 0.0);
+    zeros(p - 1)
+]
+
+
+# ----------------------------------------------------------
+# Shape / precision state
+# ----------------------------------------------------------
 
 f_ϕ(x) = priorparam[2] - linkinv(link[2], x)
-#f_ϕ(x) = priorparam[2] - invlink[2](x)
-β_ϕ0 = [find_zero(f_ϕ, 0.0); zeros(q - 1)]
 
+β_ϕ0 = [
+    find_zero(f_ϕ, 0.0);
+    zeros(q - 1)
+]
+
+
+# Full initial state mean
 μ₀ = [β_m0; β_ϕ0]
-#n₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
-Σ₀ = :fisherinfo # Σ₀ = (1 / n₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
-## Set up the prior, model and algorithm settings
 
 
+# ==========================================================
+# PRIOR COVARIANCE
+# ==========================================================
+
+Σ₀ = :fisherinfo
+
+# Σ₀ is computed inside TVGLM_Gibbs()
+# using the Inverse Gaussian Fisher information.
 @views function condMean(param, state, t)
+
     ημ = param.Z[1][t] * state[param.Zidx[1]]
+
     μ = linkinv.(param.link[1], ημ)
-    μ = clamp.(μ, 1e-12, 1.0 - 1e-12)
+
+    # Inverse Gaussian requires μ > 0
+    μ = max.(μ, 1e-12)
+
     return μ
 end
 
+
 @views function condCov(param, state, t)
+
     ημ = param.Z[1][t] * state[param.Zidx[1]]
     ηκ = param.Z[2][t] * state[param.Zidx[2]]
+
     μ = linkinv.(param.link[1], ημ)
     κ = linkinv.(param.link[2], ηκ)
-    μ = clamp.(μ, 1e-12, 1.0 - 1e-12)
+
+    # Both parameters must be positive
+    μ = max.(μ, 1e-12)
     κ = max.(κ, 1e-10)
-    variance_y = μ .* (1.0 .- μ) ./ (κ .+ 1.0)
+
+    # Inverse Gaussian:
+    # Var(Y | μ, κ) = μ^3 / κ
+    variance_y = μ.^3 ./ κ
+
     return Matrix(Diagonal(vec(variance_y)))
 end
 
 
-observation(param, state, t) =
-    @views product_distribution(
-        BetaMean.(
-            GLM.linkinv.(param.link[1], param.Z[1][t] * state[param.Zidx[1]]),
-            linkinv.(param.link[2], param.Z[2][t] * state[param.Zidx[2]])
-        )
-    )
+@views function observation(param, state, t)
 
+    ημ = param.Z[1][t] * state[param.Zidx[1]]
+    ηκ = param.Z[2][t] * state[param.Zidx[2]]
+
+    μ = linkinv.(Ref(param.link[1]), ημ)
+    κ = linkinv.(Ref(param.link[2]), ηκ)
+
+    # Numerical safeguards
+    μ = max.(μ, 1e-12)
+    κ = max.(κ, 1e-10)
+
+    return product_distribution(
+        InverseGaussian.(μ, κ)
+    )
+end
 
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=1)
+
 priorSettings = (
     ϕ₀=0.5, κ₀=0.3,             # Prior for ϕ ~ N(ϕ₀, κ₀²)
     m₀=-15.0, σ₀=3.0,           # Prior for μ ~ N(m₀, σ₀²)
@@ -213,16 +317,16 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
-    nIter=3000,              # Number of iterations in the Gibbs sampler
-    nBurn=3000,               # Number of burn-in iterations
+    nIter=5000,              # Number of iterations in the Gibbs sampler
+    nBurn=2000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility
     h_upper=Inf,              # Upper bound for log-volatility
-    polyaoffset=0.01,          # Offset for Polya-Gamma variables in the update of h_t
+    polyaoffset=0.00,          # Offset for Polya-Gamma variables in the update of h_t
     scaling=:none,            # Scaling of state innov, can be :full, :diagonal or :none
-    FisherInfo=FisherInfoBeta,# Fisher info
-    FisherInfoPrior=FisherInfoBeta,
+    FisherInfo=FisherInfoInverseGaussian,# Fisher info
+    FisherInfoPrior=FisherInfoInverseGaussian,
     nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
     fixed_scaling = false,     # Should the scaling matrix be fixed across Gibbs iter?
     verbose=true,             # Whether to print verbose output during sampling.
@@ -233,9 +337,9 @@ dateVec = 1:T
 keep_t0 = false # Whether to keep the state at time t=0 in the output of the Gibbs sampler
 results = []
 interpMethod = :linear
-scaling    = :none
-FisherInfo = FisherInfoBeta
-nPerGroup  = 5
+scaling      = :none
+FisherInfo   = FisherInfoInverseGaussian
+nPerGroup    = 5
 
 # Where to save everything
 save_dir = joinpath(
@@ -250,17 +354,21 @@ mkpath(save_dir)
 # ============================================================
 
 methodlabel = "Laplace-None"
-algoSettings_laplace = (;algoSettings...,scaling = scaling,nMaxIter=10, stateSamplingMethod = :ffbs_laplace, FisherInfo = FisherInfo)
+algoSettings_laplace = (;algoSettings...,scaling = scaling,nMaxIter=50, stateSamplingMethod = :ffbs_laplace, FisherInfo = FisherInfo)
 dataSettings_laplace = (y = y,X = X,covSel = covSel,nPerGroup = nPerGroup)
 
-θpost_laplace, groupSizes_laplace, nFailure_laplace =GibbsTVGLM(dataSettings_laplace,priorSettings,modelSettings,algoSettings_laplace)
+θpost_laplace, groupSizes_laplace, nFailure_laplace, nLaplaceFailure=GibbsTVGLM(dataSettings_laplace,priorSettings,modelSettings,algoSettings_laplace)
 
-prcFailure_laplace =100 * nFailure_laplace[] /(algoSettings_laplace.nBurn + algoSettings_laplace.nIter)
+prcFailure_laplace  = 100 * nFailure_laplace[] /(algoSettings_laplace.nBurn + algoSettings_laplace.nIter)
+prcFailure_laplace =100 * nFailure[] /(algoSettings_laplace.nBurn + algoSettings_laplace.nIter)
 println("$(algoSettings_laplace.stateSamplingMethod) failed at ","$(prcFailure_laplace)% of the simulated trajectories")
-quant_paramtime_laplace =quantile_multidim(θpost_laplace,[0.025, 0.5, 0.975],dims = 3)
+Y, Z, _, _ =splitEqualGroups(y,X,covSel,nPerGroup)
+nLaplaceTotal =(algoSettings.nBurn + algoSettings.nIter) * length(Y)
+prcLaplaceFailure =100 * nLaplaceFailure[] / nLaplaceTotal
+println("Laplace mode optimization failed at ", round(prcLaplaceFailure, digits = 2),"% of the filtering updates.")
 
 quant_paramtime_laplace = quantile_multidim(θpost_laplace,[0.025, 0.5, 0.975],dims = 3)
-plt_overlay          = plot_param_path_betareg(β,γ)
+plt_overlay             = plot_param_path_betareg(β,γ)
 PlotPostParamEvolution!(plt_overlay,quant_paramtime_laplace,"Laplace",groupSizes_laplace;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[4])
 display(plt_overlay)
 
@@ -274,18 +382,15 @@ obsChoice = :both
 obsTransform =
     if obsChoice === :y
         IdentityTransform()
-    elseif obsChoice === :logy
-        BetaSingleSuffStatGrouped(:logy)
-    elseif obsChoice === :log1my
-        BetaSingleSuffStatGrouped(:log1my)
     elseif obsChoice === :both
-        BetaSuffStatsGrouped()
+        InverseGaussianSuffStatsGrouped()
     else
         error("Unknown obsChoice = $obsChoice")
     end
 
-Y, _, _, groupSizes_iplf =splitEqualGroups(y,X,covSel,nPerGroup)
+
 slrObs =prepare_observation_transform(obsTransform,Y,condMean,condCov,nPerGroup)
+
 algoSettings_iplf = (;algoSettings..., nMaxIter=10, scaling = scaling,stateSamplingMethod = :ffbs_slr, FisherInfo = FisherInfo)
 dataSettings_iplf = (y = y,X = X,covSel = covSel,nPerGroup = nPerGroup)
 modelSettings_iplf = (;modelSettings...,slrObs = slrObs)

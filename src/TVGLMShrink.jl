@@ -32,17 +32,24 @@ struct IdentityTransform <: AbstractObsTransform end
 include("TVGLM_TransformedFFBS_KF.jl")
 include("TVGLM_Gibbs.jl")
 include("BetaModelSufficient.jl")
-#include("BetaModelSufficient_single.jl")
+include("IGModelSufficient.jl")
 include("GammaModelSufficient.jl")
 include("NBModelSufficient.jl")
 include("TVGLM_IEKF_ffbs_kf.jl")
 
-export FFBS_SLR_transformed!, FFBS_SLR_transformed_scaling!, GibbsTVGLM
+export FFBS_SLR_transformed!, FFBS_SLR_scaled_constrained!, GibbsTVGLM
 export BetaSuffStats, BetaSuffStatsGrouped, BetaSuffStatsAveraged, prepare_observation_transform
-export BetaSingleSuffStatGrouped
 export prepare_observation_transform
 export GammaSuffStatsAveraged,  GammaSuffStatsGrouped
 export fisher_gamma_blocks, FisherInfoGamma
+
+export InverseGaussianSuffStats,
+       InverseGaussianSuffStatsGrouped,
+       inverse_gaussian_sufficient_observation_grouped,
+       make_inverse_gaussian_sufficient_statistics_adapters_grouped,
+       FisherInfoInverseGaussian,
+       FisherInfoInverseGaussian_local
+
 export fisher_nb_blocks, FisherInfoNB, NBFactorialStatsAveraged, NBFactorialStatsGrouped
 export FFBS_IEKF_transformed!, FFBS_IEKF_transformed_scaled!,
        kalmanfilter_update_transformed_IEKF, 
@@ -60,6 +67,7 @@ export PlotPostParamEvolution, PlotPostParamEvolution!, postPredCheckDistr
 include("TVGLMUtils.jl")
 export exp_lin, exp_lin_inv, simulateAR, simulateVAR, interpParam2Obs, scalingLabel
 export XDiagX, XDiagZ, densityScores,update_homoscedastic_uni!
+
 
 include("TVGLMModels.jl")
 export TVGLMmodel, LogLinLink, PositiveHardLink

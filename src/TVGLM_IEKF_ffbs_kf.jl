@@ -27,6 +27,8 @@ function FFBS_IEKF_transformed!(Draws,U,Y,A,B,condMoments::Function,condMeanJaco
     # ----------------------------------------------------------
     # Forward filtering
     # ----------------------------------------------------------
+    
+    #n_nonconverged = 0
 
     for t in 1:T
 
@@ -117,7 +119,6 @@ function FFBS_IEKF_transformed_scaled!(Draws,U,Y,A,B,condMoments::Function,condM
             At = staticA ? A : (@view A[:, :, t])
 
             # Allow static covariance, vector of covariance objects,
-
             Σₙ_raw = if ndims(Σₙ) == 3
                     S*(@view Σₙ[:, :, t])*S
             elseif Σₙ isa AbstractVector
@@ -181,6 +182,8 @@ function kalmanfilter_update_transformed_IEKF(
 )
 
     maxIter >= 1 ||throw(ArgumentError("maxIter must be at least one."))
+    converged = false
+    step_limited = false
 
     # ==========================================================
     # Prior
@@ -205,8 +208,8 @@ function kalmanfilter_update_transformed_IEKF(
 
     constrained   = true
     precision_idx = length(mu_iter)
-    delta_gamma   = 0.5 # Maximum precision-state change per iteration
-    sd_gamma_max  = 0.5      # maximum posterior SD of precision state
+    delta_gamma   = 1.0 # Maximum precision-state change per iteration
+    sd_gamma_max  = 1.0      # maximum posterior SD of precision state
     var_gamma_max = sd_gamma_max^2
 
     if maxIter == 1
@@ -237,6 +240,7 @@ function kalmanfilter_update_transformed_IEKF(
         b = clamp(d[precision_idx], -delta_gamma_eff, delta_gamma_eff) # clamp only precision
      
         if constrained 
+            
             step_limited = b != d[precision_idx]
 
                 if step_limited
@@ -263,9 +267,29 @@ function kalmanfilter_update_transformed_IEKF(
         mean_distance = norm(mu_new - mu_iter)
         mu_iter = mu_new
 
-        if !step_limited && mean_distance < tol
+        converged = !step_limited && mean_distance < tol
+
+        if converged
             break
         end
+
+        #if !step_limited && mean_distance < tol
+            #break
+        #end
+    end
+
+    ###########################
+    if !converged
+        #@warn "IEKF reached maxIter without convergence" t
+
+        # ------------------------------------------------------
+        # Recompute local approximation at the FINAL IEKF state
+        # ------------------------------------------------------
+        h_k, R_k = condMoments(mu_iter, param, t)
+        H_k = condJacobian(mu_iter, param, t)
+
+        S_k = H_k * Omega_prior * H_k' + R_k
+        K_k = Omega_prior * H_k' / S_k
     end
 
     # ==========================================================
@@ -278,7 +302,6 @@ function kalmanfilter_update_transformed_IEKF(
     # Joseph
     #I_KH = I - K_k * H_k
     #Omega_updated = I_KH * Omega_prior * I_KH' + K_k * R_k * K_k'
-
     Omega_updated =(I - K_k * H_k) *Omega_prior
     Omega_updated = Matrix(Symmetric((Omega_updated + Omega_updated')/2))
 
@@ -314,11 +337,12 @@ function kalmanfilter_update_transformed_IEKF(
         mu_iter,
         Omega_updated,
         mu_prior,
-        Omega_prior,
+        Omega_prior
+        #converged
     )
 end
 
-### The one I use wihtour bounds
+### The one I use without bounds
 function kalmanfilter_update_transformed_IEKF_ref(
     mu::AbstractVector,
     Omega::AbstractMatrix,

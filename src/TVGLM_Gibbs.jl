@@ -3,6 +3,8 @@
 # - non-linear/non-Gaussian (NN) observation model
 # - linear Gaussian (LG) state evolution (conditional on Polya-Gamma latents)
 # - dynamic shrinkage process prior for the state innovations 
+
+
 function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     progessbar=(status=true, message="Sampling progress: "))
 
@@ -10,9 +12,10 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     y, X, covSel, nPerGroup = dataSettings
     ϕ₀, κ₀, m₀, σ₀, ν₀, ψ₀, μ₀, Σ₀, n₀ = priorSettings
     stateSamplingMethod, nParticles, nIter, nBurn, nMaxIter, nPrePGAS, offsetMethod,
-    h_upper, polyaoffset, scaling, FisherInfo, nCalibScale, fixed_scaling, verbose = algoSettings
-    #observation, link, condMean, condCov, innovModel, α, β, updateσₙ, nMixComp = modelSettings
-     (;observation,link,condMean,condCov,slrObs,innovModel,α,β,updateσₙ,nMixComp) = modelSettings
+    h_upper, polyaoffset, scaling, FisherInfo, FisherInfoPrior, nCalibScale, fixed_scaling, verbose = algoSettings
+    #observation2, link, condMean2, condCov2, slrObs, innovModel, α, β, updateσₙ, nMixComp = modelSettings
+
+    (;observation,link,condMean,condCov,slrObs,innovModel,α,β,updateσₙ,nMixComp) = modelSettings
 
     if verbose
         println("$stateSamplingMethod using scaling = $scaling with $nPerGroup obs per group.")
@@ -27,6 +30,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
         σ₀ = σ₀*ones(nState)
         ν₀ = ν₀*ones(nState)
         ψ₀ = ψ₀*ones(nState)
+        
         priorSettings = (
             ϕ₀=ϕ₀, κ₀=κ₀,             
             m₀=m₀, σ₀=σ₀,           
@@ -50,15 +54,18 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
     end
 
     # Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
+    
+    ### Links fisher
+    #Instantiate model parameters (Σᵥ = I for all t), overwritten at each Gibbs iteration
     param = TVGLMmodel(LogVol2Covs(zeros(length(groupSizes), nState)), Z, Xsel, link, Zidx)
 
-    ### Links fisher
-    link_fisher = (link[1], GLM.LogLink())
-    param_fisher = TVGLMmodel(LogVol2Covs(zeros(length(groupSizes), nState)),Z,Xsel,link_fisher,Zidx)
+    #link_fisher = (link[1], GLM.LogLink())
+    #param_fisher = TVGLMmodel(LogVol2Covs(zeros(length(groupSizes), nState)),Z,Xsel,link_fisher,Zidx)
+    #param_fisher = TVGLMmodel(LogVol2Covs(zeros(length(groupSizes), nState)),Z,Xsel,link,Zidx)
 
     # Set up prior cov for t=0 state, with option to use Fisher info based prior
     if Σ₀ == :fisherinfo
-        Σ₀ = Hermitian((size(X, 1) / n₀) * inv(FisherInfo(param_fisher, μ₀, 1)))
+        Σ₀ = Hermitian((size(X, 1) / n₀) * inv(FisherInfoPrior(param, μ₀, 1)))
         if verbose
             println("Prior at t=0 based on Fisher info with n₀ = $n₀")
             priorStd = sqrt.(diag(Σ₀))
@@ -77,30 +84,37 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
         Svec_collect = zeros(0, 0, 0, 0) # Empty array if not collecting scaling matrices
     end
     Svec = zeros(nState, nState, T) # Storage for scaling matrices
+    
     if scaling !== :none
-        algoSettingsCalibrate = (; algoSettings..., scaling=:none,
-            stateSamplingMethod=:ffbs_laplace, nIter=nCalibScale,
-            nBurn=round(Int, 0.1 * nCalibScale), verbose=false)
+        
+        algoSettingsCalibrate  = (; algoSettings..., scaling=:none,stateSamplingMethod=:ffbs_laplace, 
+                                        nIter=nCalibScale,nBurn=round(Int, 0.1 * nCalibScale), verbose=false)
+        dataSettingsCalibrate  = (y = y,X = X,covSel = covSel,nPerGroup = nPerGroup)
+        priorSettingsCalibrate = (;priorSettings...,n₀ = 1)
+        modelSettingsCalibrate = modelSettings
 
-        θpost0, _, _ = GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettingsCalibrate, progessbar=(status=progessbar.status, message="Calibrating scaling matrix: "))
+        θpost0, _, _, _ =   GibbsTVGLM(dataSettingsCalibrate,priorSettingsCalibrate,modelSettingsCalibrate,algoSettingsCalibrate,progessbar = (status=progessbar.status,
+                            message="Calibrating scaling matrix: "))
         
         for t in 1:T
             θmedian_t = median(θpost0[t, :, :]; dims=2)
             if scaling == :full
                 Svec[:, :, t] = sqrt(inv(Symmetric(groupSizes[t] * 
-                    FisherInfo(param_fisher, θmedian_t, t) / Tobs)))
+                    FisherInfo(param, θmedian_t, t) / Tobs)))
             elseif scaling == :diag
-                Svec[:, :, t] = Diagonal(sqrt(inv(Symmetric(groupSizes[t] * 
-                    FisherInfo(param_fisher, θmedian_t, t) / Tobs)))) 
+                Svec[:, :, t] = Diagonal(sqrt(inv(Symmetric(groupSizes[t] * FisherInfo(param, θmedian_t, t) / Tobs)))) 
             elseif scaling == :fulllocal 
-                Svec[:, :, t] = sqrt(pinv(Symmetric(FisherInfo(param_fisher, θmedian_t, t))))
+                Svec[:, :, t] = sqrt(pinv(Symmetric(FisherInfo(param, θmedian_t, t))))
             elseif scaling == :diaglocal
-                Svec[:, :, t] = Diagonal(sqrt(pinv(Symmetric(FisherInfo(param_fisher, θmedian_t, t)))))
+                Svec[:, :, t] = Diagonal(sqrt(pinv(Symmetric(FisherInfo(param, θmedian_t, t)))))
             else
             end
         end
 
     end
+
+     #Svec_diag = copy(Svec)
+     #Svec
 
     # Define the scaling matrix
     ScaleMat =
@@ -239,7 +253,7 @@ function GibbsTVGLM(dataSettings, priorSettings, modelSettings, algoSettings;
                 FFBS_SLR_transformed!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
                 #FFBS_SLR_transformed!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀,nMaxIter, ws; α=0.1, β=2, κ=0, sample_t0=true, nFailure=nFailure)
             else
-                FFBS_SLR_transformed_scaling!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀, nMaxIter, ScaleMat, Svec, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
+                FFBS_SLR_scaled_constrained!(θ, U, Y_sufficient, A, B, sufficient_condMoments, param, param.Σᵥ, μ₀, Σ₀, nMaxIter, ScaleMat, Svec, ws; α=1, β=0, κ=0, sample_t0=true, nFailure=nFailure)
             end
         elseif stateSamplingMethod == :pgas
             θ = PGASsimulate!(θparticles, Y, nState, nParticles, param,

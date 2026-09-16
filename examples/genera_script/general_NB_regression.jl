@@ -160,10 +160,8 @@ link_nb = (LogLinLink(),)
 # IDENTICAL to reference NB simulation
 # ============================================================
 
-γ = [t < T / 2 ? -1.5 : 0.0 for t in 1:T]
-
-#γ = [t < T / 2 ? 1.0 : 3.0 for t in 1:T]
-
+#γ = [t < T / 2 ? -1.5 : 0.0 for t in 1:T]
+γ = [t < T / 2 ? 1.0 : 3.0 for t in 1:T]
 
 
 # ============================================================
@@ -375,15 +373,16 @@ modelSettings = (
 algoSettings = (
         stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
         nParticles=100,           # Number of particles if using PGAS
-        nIter=1000,              # Number of iterations in the Gibbs sampler
-        nBurn=1000,               # Number of burn-in iterations
+        nIter=7000,              # Number of iterations in the Gibbs sampler
+        nBurn=3000,               # Number of burn-in iterations
         nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
         nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
         offsetMethod=eps(),       # Offset for log-volatility
         h_upper=Inf,              # Upper bound for log-volatility
-        polyaoffset=0.01,          # Offset for Polya-Gamma variables in the update of h_t
+        polyaoffset=0.0000,          # Offset for Polya-Gamma variables in the update of h_t
         scaling=:none,            # Scaling of state innov, can be :full, :diagonal or :none
         FisherInfo=FisherInfoNB,# Fisher info
+           FisherInfoPrior=FisherInfoBeta,
         nCalibScale=1000,         # No. iter to calibrate the scaling matrix :fullfixed case
         fixed_scaling = false,     # Should the scaling matrix be fixed across Gibbs iter?
         verbose=true,             # Whether to print verbose output during sampling.

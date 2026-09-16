@@ -36,11 +36,13 @@ end
 # NOTE: this now returns the Fisher info, not the sqrt(inv(FisherInfo)) and it is 
 # Fisher for the whole same of T observations, not per observation.
 
+
+### Beta moments and fisher_scaling_diagonal_first
 function fisher_beta_blocks(Xm, Xp, βm, βp, linkm::Link, linkp::Link)
 
-    μ = GLM.linkinv.(linkm, Xm * βm)
+    μ = linkinv.(linkm, Xm * βm)
     ϕ = linkinv.(linkp, Xp * βp)
-    dμ = GLM.mueta.(linkm, Xm * βm)   # dμ/dηm
+    dμ = mueta.(linkm, Xm * βm)   # dμ/dηm
     dϕ = mueta.(linkp, Xp * βp)   # dϕ/dηp
 
     a = μ .* ϕ
@@ -75,9 +77,14 @@ function FisherInfoBeta(param, μ, t)
         μ[(size(param.X[1], 2)+1):end], param.link[1], param.link[2])
 end
 
-
 # Function that computes the Fisher info (not Scaling matrix) for all obs 
 function FisherInfoBeta_local(param, μ, t)
-    return fisher_beta_blocks(param.Z[t][1], param.Z[t][2], μ[1:size(param.Z[t][1], 2)],
-        μ[(size(param.Z[t][1], 2)+1):end], param.link[1], param.link[2])
+    return fisher_beta_blocks(
+        param.Z[1][t],
+        param.Z[2][t],
+        μ[1:size(param.Z[1][t], 2)],
+        μ[(size(param.Z[1][t], 2)+1):end],
+        param.link[1],
+        param.link[2]
+    )
 end

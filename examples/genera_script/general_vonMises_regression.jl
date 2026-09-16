@@ -23,169 +23,445 @@ gr(legend=:topleft, grid=false, color=colors[2], lw=2, legendfontsize=12,
     titlefontsize=18, markerstrokecolor=:auto)
 
 Random.seed!(slurm_id); # set seed for reproducibility, different seed for each slurm_id
+# Simulate data from the Von Mises regression model
+# with time-varying mean direction and concentration
 
-# Simulate data from the Beta regression model with fixed parameter paths
 using Random
 using Distributions
+using SpecialFunctions
 
 # ==========================================================
-# Simulate Beta data with time-varying mean and precision
-# No regression covariates
+# Simulate Von Mises data with
+# time-varying mean direction and concentration
 # ==========================================================
 
 Random.seed!(12345)
 
-## Simulate data from the different regression model with fixed parameter paths
-T = 500;
-β₀ = [2, 0]
-p = size(β₀, 1)[1]
+T = 500
 
-## Generate covariate
+β₀ = [2.0, 0.0]
+p = size(β₀, 1)
+
+# ----------------------------------------------------------
+# Generate covariates
+# ----------------------------------------------------------
+
 X_regressors = ones(T + 1)
-X_regressors = hcat(X_regressors, simulateAR(T + 1, [0.7], 1.0))
 
-## fixed parameter paths
-function simulate_μ(X, T, p, link, β₀)
+X_regressors = hcat(
+    X_regressors,
+    simulateAR(T + 1, [0.7], 1.0)
+)
+
+
+# ----------------------------------------------------------
+# Fixed parameter paths for the mean direction
+#
+# μ_t = X_t' β_t
+#
+# Notice:
+# μ_t is an angle, so we do NOT use exp() here.
+# The Von Mises likelihood is periodic in μ.
+# ----------------------------------------------------------
+
+function simulate_μ_vonmises(X, T, p, β₀)
+
     β = zeros(T + 1, p)
     β[1, :] = β₀
-    λtime = zeros(T + 1)
 
-    for t in 2:(T+1)
+    μtime = zeros(T + 1)
+
+    for t in 2:(T + 1)
+
+        # Time-varying intercept
         β[t, 1] = sin(2π * t / T)
+
+        # Time-varying regression coefficient
         if t < T / 3
-            β[t, 2] = 0
+
+            β[t, 2] = 0.0
+
+        elseif t < (2 / 3) * T
+
+            β[t, 2] = -1.0
+
         else
-            if t < ((2 / 3) * T)
-                β[t, 2] = -1
-            else
-                β[t, 2] = 1
-            end
+
+            β[t, 2] = 1.0
+
         end
 
-        λtime[t] = linkinv.(link[1], dot(β[t, :], X[t, :]))
-        end
+        ημ = dot(β[t, :], X[t, :])
 
-    return β[2:end, :], λtime[2:end]
+        # Identity link for circular location
+        μtime[t] = ημ
+    end
+
+    return β[2:end, :], μtime[2:end]
 end
 
-γ = [t < T / 2 ? 1 : 3 for t in 1:T]
-#γ = [t < T / 2 ? 1 : 9 for t in 1:T]
 
-# Example time-varying paths
-#γ = zeros(T, q)
-#for t in 1:T
-    #γ[t, 1] = 0.8 * sin(2.5π * t / 150)
-#end
+β, μtime = simulate_μ_vonmises(
+    X_regressors,
+    T,
+    p,
+    β₀
+)
 
 
-ψtime = exp.(γ)
+# ----------------------------------------------------------
+# Time-varying concentration
+#
+# κ_t = exp(γ_t)
+#
+# κ = 0        -> uniform distribution on the circle
+# larger κ     -> increasingly concentrated around μ
+# ----------------------------------------------------------
 
-BetaMean(μ, ψ) = Beta(1.0e-15 + μ * ψ, 1.0e-15 + (1 - μ) * ψ)
-invlink_logit = (LogitLink(),)
+γ = [
+    t < T / 2 ? 1.0 : 3.0
+    for t in 1:T
+]
 
-β,μtime = simulate_μ(X_regressors, T, p, invlink_logit, β₀)
+κtime = exp.(γ)
 
-y = [rand(BetaMean(μtime[t],ψtime[t])) for t in 1:T]
-y = clamp.(y, 1e-16, 1-1e-16)
-#BetaData = [y X[2:end,:] β γ μtime ψtime ]
 
-# Beta shape parameters
-αtime = μtime .* ψtime
-βtime = (1 .- μtime) .* ψtime
+# ----------------------------------------------------------
+# Von Mises distribution
+#
+# Distributions.jl:
+# VonMises(mean direction, concentration)
+# ----------------------------------------------------------
 
-# plot the parameter evolution path of the regression coefficients
+VonMisesMean(μ, κ) = VonMises(μ, κ)
+
+
+# ----------------------------------------------------------
+# Simulate observations
+# ----------------------------------------------------------
+
+y = [
+    rand(VonMisesMean(μtime[t], κtime[t]))
+    for t in 1:T
+]
+
+
+# ----------------------------------------------------------
+# Principal-angle version of the mean direction
+#
+# maps μ into (-π, π]
+#
+# Useful for plotting only.
+# ----------------------------------------------------------
+
+μtime_wrapped = atan.(sin.(μtime), cos.(μtime))
+
+
+# ----------------------------------------------------------
+# Circular variance
+#
+# A(κ) = I₁(κ) / I₀(κ)
+#
+# Circular variance = 1 - A(κ)
+# ----------------------------------------------------------
+
+Atime = besseli.(1, κtime) ./ besseli.(0, κtime)
+
+circvartime = 1 .- Atime
+
+
+# ----------------------------------------------------------
+# Parameter paths
+# ----------------------------------------------------------
+
 plt = plot_param_path_betareg(β, γ)
 
-# plot the evolution of the Beta distribution parameters over time
-plot_betaparam_evolution(μtime, ψtime, αtime, βtime)
-
-# plot the evolution of the Beta density over time and the time series
-plot_betadensity_evolution(μtime, ψtime, y)
-
 
 # ----------------------------------------------------------
-# Link functions
+# Plot observations
 # ----------------------------------------------------------
 
-link = (LogitLink(), LogLinLink()) # best so far
-#invlink = (x -> logistic(x), x -> exp(x))
-
-
-# ==========================================================
-# SIMULATE OBSERVATIONS
-# ==========================================================
-sum(y==1)
-sum(y==0)
-
-y = clamp.(y, 1e-12, 1 - 1e-12)
+link = (IdentityLink(), LogLinLink())
 plot(y)
+
+
+# Optional: compare observations and true mean direction
+plot(
+    y,
+    label = "y",
+    ylabel = "angle (radians)"
+)
+
+plot!(
+    μtime_wrapped,
+    label = "true mean direction",
+    linewidth = 2
+)
+
 
 
 # ==========================================================
 # VARIABLES KEPT FOR COMPATIBILITY WITH LATER CODE
 # ==========================================================
-# There are no actual regressors.
-# X contains only the intercept column.
 
-X        = X_regressors[2:end,:]
-covSel   = [[1,2], [1]]
-p        = length(covSel[1])
-q        = length(covSel[2])
+X      = X_regressors[2:end, :]
+covSel = [[1, 2], [1]]
 
-# No covariate-generating AR processes
-#ρ  = Float64[]
-#σₑ = Float64[]
-#mₑ = Float64[]
+p = length(covSel[1])   # mean-direction states
+q = length(covSel[2])   # concentration states
 
-## The prior for the state at time t=0 using priors on intercepts and Fisher info
 
-## The prior for the state at time t=0 using priors on intercepts and Fisher info
-m = mean(y[1:20])
-v = var(y[1:20])
-priorparam = [m, m * (1 - m) / v - 1] # Prior for y₀ ∼ BetaMean(priorparam[1], priorparam[2])
-#f_μ(x) = priorparam[1] - linkinv(link[1], x)
+# ==========================================================
+# PRIOR MEAN FOR THE STATE AT t = 0
+# ==========================================================
+
+# Moment estimates from the first observations
+#
+# Von Mises:
+#
+#   E[cos(Y)] = A₁(κ) cos(μ)
+#   E[sin(Y)] = A₁(κ) sin(μ)
+#
+# where
+#
+#   A₁(κ) = I₁(κ) / I₀(κ).
+#
+# Hence:
+#
+#   μ = atan(E[sin(Y)], E[cos(Y)])
+#
+# and κ is obtained from
+#
+#   A₁(κ) = R,
+#
+# where R is the mean resultant length.
+
+
+y0 = y[1:20]
+
+C = mean(cos.(y0))
+S = mean(sin.(y0))
+
+# Mean direction
+m = atan(S, C)
+
+# Mean resultant length
+Rbar = sqrt(C^2 + S^2)
+
+
+# ----------------------------------------------------------
+# Recover concentration κ from
+#
+#     I₁(κ) / I₀(κ) = Rbar
+#
+# Use scaled Bessel functions for numerical stability.
+# ----------------------------------------------------------
+
+A1(κ) = besselix(1, κ) / besselix(0, κ)
+
+
+function concentration_from_resultant(R)
+
+    # numerical protection
+    R = clamp(R, 0.0, 1.0 - 1e-10)
+
+    if R < 1e-8
+        return 1e-8
+    end
+
+    # Find an upper bracket
+    κ_upper = 1.0
+
+    while A1(κ_upper) < R
+        κ_upper *= 2.0
+    end
+
+    return find_zero(
+        κ -> A1(κ) - R,
+        (0.0, κ_upper),
+        Bisection()
+    )
+end
+
+
+κhat = concentration_from_resultant(Rbar)
+
+
+priorparam = [
+    m,
+    κhat
+]
+
+
+# ----------------------------------------------------------
+# Mean-direction state
+# ----------------------------------------------------------
+#
+# With IdentityLink:
+#
+#     μ = ημ
+#
+# so this is essentially just m.
+# Keeping the generic form makes it compatible
+# with your existing code.
+# ----------------------------------------------------------
+
 f_μ(x) = priorparam[1] - linkinv(link[1], x)
-β_m0 = [find_zero(f_μ, 0.0); zeros(p - 1)]
 
-f_ϕ(x) = priorparam[2] - linkinv(link[2], x)
-#f_ϕ(x) = priorparam[2] - invlink[2](x)
-β_ϕ0 = [find_zero(f_ϕ, 0.0); zeros(q - 1)]
+β_m0 = [
+    find_zero(f_μ, priorparam[1]);
+    zeros(p - 1)
+]
 
-μ₀ = [β_m0; β_ϕ0]
-#n₀ = 1.0 # Prior sample size for the state at time t=0, used to scale InvFisher
-Σ₀ = :fisherinfo # Σ₀ = (1 / n₀) * inv((1 / T) * Finfo) computed inside TVGLM_Gibbs()
-## Set up the prior, model and algorithm settings
+
+# ----------------------------------------------------------
+# Concentration state
+# ----------------------------------------------------------
+#
+# With LogLinLink:
+#
+#     κ = exp(ηκ)
+#
+# so the initial state is log(κhat).
+# ----------------------------------------------------------
+
+f_κ(x) = priorparam[2] - linkinv(link[2], x)
+
+β_κ0 = [
+    find_zero(f_κ, log(priorparam[2]));
+    zeros(q - 1)
+]
+
+
+# ----------------------------------------------------------
+# Full initial state mean
+# ----------------------------------------------------------
+
+μ₀ = [β_m0; β_κ0]
+
+
+# ==========================================================
+# PRIOR COVARIANCE
+# ==========================================================
+
+Σ₀ = :fisherinfo
+
+
+# ==========================================================
+# MOMENTS
+# ==========================================================
+# Σ₀ is computed inside TVGLM_Gibbs()
+# using the Inverse Gaussian Fisher information.
+
+
+# ==========================================================
+# MOMENTS FOR VON MISES SUFFICIENT STATISTICS
+#
+# T(Y) = [cos(Y), sin(Y)]
+# ==========================================================
+
+# Stable Bessel ratios
+A1(κ) = besselix(1, κ) / besselix(0, κ)
+A2(κ) = besselix(2, κ) / besselix(0, κ)
 
 
 @views function condMean(param, state, t)
-    ημ = param.Z[1][t] * state[param.Zidx[1]]
-    μ = linkinv.(param.link[1], ημ)
-    μ = clamp.(μ, 1e-12, 1.0 - 1e-12)
-    return μ
-end
 
-@views function condCov(param, state, t)
     ημ = param.Z[1][t] * state[param.Zidx[1]]
     ηκ = param.Z[2][t] * state[param.Zidx[2]]
-    μ = linkinv.(param.link[1], ημ)
-    κ = linkinv.(param.link[2], ηκ)
-    μ = clamp.(μ, 1e-12, 1.0 - 1e-12)
+
+    # Identity link for mean direction
+    μ = linkinv.(Ref(param.link[1]), ημ)
+
+    # Log link for concentration
+    κ = linkinv.(Ref(param.link[2]), ηκ)
+
     κ = max.(κ, 1e-10)
-    variance_y = μ .* (1.0 .- μ) ./ (κ .+ 1.0)
-    return Matrix(Diagonal(vec(variance_y)))
+
+    a1 = A1.(κ)
+
+    # E[cos(Y)] and E[sin(Y)]
+    h_cos = a1 .* cos.(μ)
+    h_sin = a1 .* sin.(μ)
+
+    return vcat(h_cos, h_sin)
 end
 
+
+@views function condCov(param, state, t)
+
+    ημ = param.Z[1][t] * state[param.Zidx[1]]
+    ηκ = param.Z[2][t] * state[param.Zidx[2]]
+
+    μ = linkinv.(Ref(param.link[1]), ημ)
+    κ = linkinv.(Ref(param.link[2]), ηκ)
+
+    κ = max.(κ, 1e-10)
+
+    a1 = A1.(κ)
+    a2 = A2.(κ)
+
+    g = length(μ)
+
+    R = zeros(2g, 2g)
+
+    for i in 1:g
+
+        cμ = cos(μ[i])
+        sμ = sin(μ[i])
+
+        mcos = a1[i] * cμ
+        msin = a1[i] * sμ
+
+        # Second moments
+        Ecos2 =
+            0.5 * (1 + a2[i] * cos(2 * μ[i]))
+
+        Esin2 =
+            0.5 * (1 - a2[i] * cos(2 * μ[i]))
+
+        Ecossin =
+            0.5 * a2[i] * sin(2 * μ[i])
+
+        # Covariance of [cos(Y), sin(Y)]
+        var_cos =
+            Ecos2 - mcos^2
+
+        var_sin =
+            Esin2 - msin^2
+
+        cov_cos_sin =
+            Ecossin - mcos * msin
+
+        R[i, i] = var_cos
+        R[g + i, g + i] = var_sin
+
+        R[i, g + i] = cov_cos_sin
+        R[g + i, i] = cov_cos_sin
+    end
+
+    return R
+end
 
 observation(param, state, t) =
     @views product_distribution(
-        BetaMean.(
-            GLM.linkinv.(param.link[1], param.Z[1][t] * state[param.Zidx[1]]),
-            linkinv.(param.link[2], param.Z[2][t] * state[param.Zidx[2]])
+        VonMises.(
+            linkinv.(Ref(param.link[1]),
+                     param.Z[1][t] * state[param.Zidx[1]]),
+
+            max.(
+                linkinv.(Ref(param.link[2]),
+                         param.Z[2][t] * state[param.Zidx[2]]),
+                1e-10
+            )
         )
     )
 
 
+
+
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=1)
+
 priorSettings = (
     ϕ₀=0.5, κ₀=0.3,             # Prior for ϕ ~ N(ϕ₀, κ₀²)
     m₀=-15.0, σ₀=3.0,           # Prior for μ ~ N(m₀, σ₀²)
@@ -213,8 +489,8 @@ modelSettings = (
 algoSettings = (
     stateSamplingMethod=:ffbs_laplace, # Algorithm to sample the state
     nParticles=100,           # Number of particles if using PGAS
-    nIter=3000,              # Number of iterations in the Gibbs sampler
-    nBurn=3000,               # Number of burn-in iterations
+    nIter=2000,              # Number of iterations in the Gibbs sampler
+    nBurn=2000,               # Number of burn-in iterations
     nMaxIter=10,              # Maximum number of iterations for Laplace/IPLF
     nPrePGAS=500,             # Number of pre-PGAS iterations to initialize the particles
     offsetMethod=eps(),       # Offset for log-volatility
@@ -233,9 +509,9 @@ dateVec = 1:T
 keep_t0 = false # Whether to keep the state at time t=0 in the output of the Gibbs sampler
 results = []
 interpMethod = :linear
-scaling    = :none
-FisherInfo = FisherInfoBeta
-nPerGroup  = 5
+scaling      = :none
+FisherInfo   = FisherInfoBeta
+nPerGroup    = 5
 
 # Where to save everything
 save_dir = joinpath(
@@ -255,12 +531,12 @@ dataSettings_laplace = (y = y,X = X,covSel = covSel,nPerGroup = nPerGroup)
 
 θpost_laplace, groupSizes_laplace, nFailure_laplace =GibbsTVGLM(dataSettings_laplace,priorSettings,modelSettings,algoSettings_laplace)
 
-prcFailure_laplace =100 * nFailure_laplace[] /(algoSettings_laplace.nBurn + algoSettings_laplace.nIter)
+prcFailure_laplace  = 100 * nFailure_laplace[] /(algoSettings_laplace.nBurn + algoSettings_laplace.nIter)
 println("$(algoSettings_laplace.stateSamplingMethod) failed at ","$(prcFailure_laplace)% of the simulated trajectories")
-quant_paramtime_laplace =quantile_multidim(θpost_laplace,[0.025, 0.5, 0.975],dims = 3)
+quant_paramtime_laplace = quantile_multidim(θpost_laplace,[0.025, 0.5, 0.975],dims = 3)
 
 quant_paramtime_laplace = quantile_multidim(θpost_laplace,[0.025, 0.5, 0.975],dims = 3)
-plt_overlay          = plot_param_path_betareg(β,γ)
+plt_overlay             = plot_param_path_betareg(β,γ)
 PlotPostParamEvolution!(plt_overlay,quant_paramtime_laplace,"Laplace",groupSizes_laplace;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[4])
 display(plt_overlay)
 
@@ -300,6 +576,10 @@ plt_overlay = plot_param_path_betareg(β,γ)
 PlotPostParamEvolution!(plt_overlay,quant_paramtime_iplf,"IPLF",groupSizes_iplf;dateVec = dateVec,interpMethod = interpMethod,plot_t0 = keep_t0,interval_style = :solid,lw = 2,c = colors[4])
 display(plt_overlay)
 
+
+#plot(y)
+## The initial values 
+#plot(y)
 
 # ============================================================
 # 3. IEKF

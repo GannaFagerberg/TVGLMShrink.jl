@@ -164,14 +164,18 @@ push!(energyScoreAll, energyScore)
 push!(variogramScoreAll, variogramScore)
 push!(MethodLabels, methodlabel)
 
+####################################
 ## Laplace approximation - none
+####################################
+
 methodlabel = "Laplace-None"
 algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_laplace);
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
 
-θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
-    priorSettings, modelSettings, algoSettings);
+#θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure 
+θpost, nFailure = GibbsTVGLM(dataSettings,priorSettings, modelSettings, algoSettings);
 
+_, _, _, groupSizes = splitEqualGroups(y, X, covSel, nPerGroup)
 prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
 println("$(algoSettings.stateSamplingMethod) failed at $(prcFailure)% 
     of the simulated trajectories")
@@ -258,7 +262,8 @@ methodlabel = "IPLF"
 algoSettings = (; algoSettings..., scaling=scaling, stateSamplingMethod=:ffbs_slr);
 dataSettings = (y=y, X=X, covSel=covSel, nPerGroup=nPerGroup);
 
-θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure = GibbsTVGLM(dataSettings,
+#θpost, Hpost, ϕpost, σ²ₙpost, μpost, groupSizes, nFailure
+θpost, nFailure = GibbsTVGLM(dataSettings,
     priorSettings, modelSettings, algoSettings);
 
 prcFailure = 100 * nFailure[] / (algoSettings.nBurn + algoSettings.nIter);
